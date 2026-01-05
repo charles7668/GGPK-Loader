@@ -4,9 +4,12 @@ internal struct GGPKRoot
 {
     public uint Length;
 
+    public char[] Tag; // ="GGPK"
+
     public uint Version;
 
-    public char[] Tag;
-
+    /// <summary>
+    /// length is 2
+    /// </summary>
     public GGPKEntry[] Entries;
 }

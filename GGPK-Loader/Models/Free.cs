@@ -3,6 +3,6 @@
 internal struct Free
 {
     public uint Length;
-    public char[] Tag; // = "FREE"
+    public byte[] Tag; // = "FREE"
     public byte[] Data;
 }

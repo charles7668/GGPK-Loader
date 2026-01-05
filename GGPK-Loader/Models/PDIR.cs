@@ -3,10 +3,10 @@
 internal struct PDIR
 {
     public uint Length;
-    public char[] Tag; // ="PDIR"
+    public byte[] Tag; // ="PDIR"
     public uint NameLength;
     public uint TotalEntries;
     public byte[] SHA256Hash;
-    public string[] Name;
+    public char[] Name;
     public DirectoryEntry[] DirectoryEntries;
 }

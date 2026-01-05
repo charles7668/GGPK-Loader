@@ -3,9 +3,9 @@
 internal struct File
 {
     public uint Length;
-    public char[] Tag; // ="FILE"
+    public byte[] Tag; // ="FILE"
     public uint NameLength;
     public byte[] SHA256Hash;
-    public string[] Name;
+    public char[] Name;
     public byte[] Data;
 }
