@@ -15,10 +15,14 @@
         <vm:MainWindowViewModel />
     </Design.DataContext>
 
-    <Grid ColumnDefinitions="*, 4, *">
-        <TreeView Grid.Column="0" />
-        <GridSplitter Grid.Column="1" Background="LightGray" ResizeDirection="Columns" />
-        <TextBlock Grid.Column="2" Text="{Binding Greeting}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+    <Grid RowDefinitions="Auto, *">
+        <Button Grid.Row="0" Content="Open" Margin="5" />
+        <Grid Grid.Row="1" ColumnDefinitions="*, 4, *">
+            <TreeView Grid.Column="0" />
+            <GridSplitter Grid.Column="1" Background="LightGray" ResizeDirection="Columns" />
+            <TextBlock Grid.Column="2" Text="{Binding Greeting}" HorizontalAlignment="Center"
+                       VerticalAlignment="Center" />
+        </Grid>
     </Grid>
 
 </Window>
