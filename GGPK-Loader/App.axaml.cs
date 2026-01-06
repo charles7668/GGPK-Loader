@@ -1,11 +1,12 @@
 using System.Linq;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
-using Avalonia.Data.Core;
 using Avalonia.Data.Core.Plugins;
 using Avalonia.Markup.Xaml;
 using GGPK_Loader.ViewModels;
 using GGPK_Loader.Views;
+using GGPK_Loader.Services;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace GGPK_Loader
 {
@@ -23,10 +24,17 @@ namespace GGPK_Loader
                 // Avoid duplicate validations from both Avalonia and the CommunityToolkit. 
                 // More info: https://docs.avaloniaui.net/docs/guides/development-guides/data-validation#manage-validationplugins
                 DisableAvaloniaDataAnnotationValidation();
-                desktop.MainWindow = new MainWindow
-                {
-                    DataContext = new MainWindowViewModel(),
-                };
+                var collection = new ServiceCollection();
+                collection.AddSingleton<MainWindow>();
+                collection.AddSingleton<IFileService>(sp => new FileService(sp.GetRequiredService<MainWindow>()));
+                collection.AddSingleton<IMessageService>(sp => new MessageService(sp.GetRequiredService<MainWindow>()));
+                collection.AddSingleton<MainWindowViewModel>();
+
+                var services = collection.BuildServiceProvider();
+
+                var mainWindow = services.GetRequiredService<MainWindow>();
+                mainWindow.DataContext = services.GetRequiredService<MainWindowViewModel>();
+                desktop.MainWindow = mainWindow;
             }
 
             base.OnFrameworkInitializationCompleted();
