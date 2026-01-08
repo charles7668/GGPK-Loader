@@ -4,7 +4,10 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
+using Avalonia.Media.Imaging;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using GGPK_Loader.Models;
@@ -26,10 +29,142 @@ public partial class MainWindowViewModel(IFileService fileService, IMessageServi
     [ObservableProperty]
     private string _buttonText = "Open";
 
-    public string Greeting { get; } = "Welcome to Avalonia!";
+    private string _currentFilePath = "";
 
     [ObservableProperty]
-    private ObservableCollection<GGPKTreeNode> _ggpkNodes = new ObservableCollection<GGPKTreeNode>();
+    private ObservableCollection<GGPKTreeNode> _ggpkNodes = new();
+
+    private CancellationTokenSource? _loadingFileCts;
+    private Task _loadingFileTask = Task.CompletedTask;
+
+    [ObservableProperty]
+    private string _nodeInfoText = "";
+
+    [ObservableProperty]
+    private Bitmap? _selectedImage;
+
+    [ObservableProperty]
+    private GGPKTreeNode? _selectedNode;
+
+    partial void OnSelectedNodeChanged(GGPKTreeNode? value)
+    {
+        var (oldCts, token) = ResetCancellationSource();
+        SelectedImage = null;
+
+        if (ShouldProcessNode(value, out var fileName))
+        {
+            NodeInfoText = fileName;
+            if (IsImageFile(fileName))
+            {
+                _loadingFileTask = ChainImageLoadingTask(_loadingFileTask, oldCts, token, value!.Offset);
+                return;
+            }
+        }
+        else
+        {
+            NodeInfoText = string.Empty;
+        }
+
+        // Cleanup if not starting a new task
+        _loadingFileTask = _loadingFileTask.ContinueWith(_ => oldCts?.Dispose(), TaskScheduler.Default);
+    }
+
+    private (CancellationTokenSource? oldCts, CancellationToken token) ResetCancellationSource()
+    {
+        var oldCts = _loadingFileCts;
+        oldCts?.Cancel();
+        _loadingFileCts = new CancellationTokenSource();
+        return (oldCts, _loadingFileCts.Token);
+    }
+
+    private static bool ShouldProcessNode(GGPKTreeNode? node, out string fileName)
+    {
+        fileName = string.Empty;
+        if (node is { Children.Count: 0 })
+        {
+            fileName = (string?)node.Value ?? string.Empty;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsImageFile(string fileName)
+    {
+        return fileName.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
+               fileName.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
+               fileName.EndsWith(".bmp", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private Task ChainImageLoadingTask(Task previousTask, CancellationTokenSource? oldCts, CancellationToken token,
+        ulong offset)
+    {
+        return previousTask.ContinueWith(async _ =>
+        {
+            oldCts?.Dispose();
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            try
+            {
+                await LoadImageAsync(offset, token);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to load image: {ex.Message}");
+            }
+        }, TaskScheduler.Default).Unwrap();
+    }
+
+    private async Task LoadImageAsync(ulong offset, CancellationToken token)
+    {
+        if (string.IsNullOrEmpty(_currentFilePath))
+        {
+            return;
+        }
+
+        await using var stream = File.OpenRead(_currentFilePath);
+        using var reader = new BinaryReader(stream);
+
+        stream.Seek((long)offset, SeekOrigin.Begin);
+        var entryLength = reader.ReadUInt32();
+        var entryTag = new string(reader.ReadChars(4));
+
+        if (entryTag != "FILE")
+        {
+            return;
+        }
+
+        var nameLength = reader.ReadUInt32();
+        stream.Seek(32 + nameLength * 2, SeekOrigin.Current); // Skip hash + name
+
+        var headerSize = 4 + 4 + 4 + 32 + nameLength * 2;
+        var dataSize = entryLength - headerSize;
+
+        if (dataSize <= 0)
+        {
+            return;
+        }
+
+        var data = reader.ReadBytes((int)dataSize);
+        if (token.IsCancellationRequested)
+        {
+            return;
+        }
+
+        using var memoryStream = new MemoryStream(data);
+        var bitmap = new Bitmap(memoryStream);
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!token.IsCancellationRequested)
+            {
+                SelectedImage = bitmap;
+            }
+        });
+    }
 
     [RelayCommand]
     private async Task OpenGgpkFile()
@@ -37,6 +172,7 @@ public partial class MainWindowViewModel(IFileService fileService, IMessageServi
         var filePath = await fileService.OpenFileAsync();
         if (filePath != null)
         {
+            _currentFilePath = filePath;
             Debug.WriteLine($"Selected file in VM: {filePath}");
 
             ButtonText = "Loading";
