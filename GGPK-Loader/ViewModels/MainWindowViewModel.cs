@@ -65,6 +65,12 @@ public partial class MainWindowViewModel(IFileService fileService, IMessageServi
                 _loadingFileTask = ChainTextLoadingTask(_loadingFileTask, oldCts, token, value!.Offset);
                 return;
             }
+
+            if (IsGgdhFile(fileName))
+            {
+                _loadingFileTask = ChainGgdhLoadingTask(_loadingFileTask, oldCts, token, value!.Offset);
+                return;
+            }
         }
         else
         {
@@ -245,6 +251,95 @@ public partial class MainWindowViewModel(IFileService fileService, IMessageServi
             if (!token.IsCancellationRequested)
             {
                 NodeInfoText = text;
+            }
+        });
+    }
+
+    private static bool IsGgdhFile(string fileName)
+    {
+        return fileName.EndsWith("ggdh", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private Task ChainGgdhLoadingTask(Task previousTask, CancellationTokenSource? oldCts, CancellationToken token,
+        ulong offset)
+    {
+        return previousTask.ContinueWith(async _ =>
+        {
+            oldCts?.Dispose();
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            try
+            {
+                await LoadGgdhAsync(offset, token);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to load ggdh: {ex.Message}");
+            }
+        }, TaskScheduler.Default).Unwrap();
+    }
+
+    private async Task LoadGgdhAsync(ulong offset, CancellationToken token)
+    {
+        if (string.IsNullOrEmpty(_currentFilePath))
+        {
+            return;
+        }
+
+        await using var stream = File.OpenRead(_currentFilePath);
+        using var reader = new BinaryReader(stream);
+
+        stream.Seek((long)offset, SeekOrigin.Begin);
+        var entryLength = reader.ReadUInt32();
+        var entryTag = new string(reader.ReadChars(4));
+
+        if (entryTag != "FILE")
+        {
+            return;
+        }
+
+        var nameLength = reader.ReadUInt32();
+        stream.Seek(32 + nameLength * 2, SeekOrigin.Current); // Skip hash + name
+
+        var headerSize = 4 + 4 + 4 + 32 + nameLength * 2;
+        var dataSize = entryLength - headerSize;
+
+        if (dataSize <= 0)
+        {
+            return;
+        }
+
+        var data = reader.ReadBytes((int)dataSize);
+        if (token.IsCancellationRequested)
+        {
+            return;
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("GGDH File Content");
+        sb.AppendLine($"Total Data Size: {dataSize} bytes");
+        sb.AppendLine("--------------------------------------------------");
+        sb.AppendLine("Raw Data (First 64 bytes):");
+
+        var displayLength = Math.Min((int)dataSize, 64);
+
+        for (var i = 0; i < displayLength; i++)
+        {
+            sb.Append($"{data[i]:X2} ");
+            if ((i + 1) % 16 == 0)
+            {
+                sb.AppendLine();
+            }
+        }
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!token.IsCancellationRequested)
+            {
+                NodeInfoText = sb.ToString();
             }
         });
     }
