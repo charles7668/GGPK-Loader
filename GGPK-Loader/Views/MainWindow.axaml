@@ -27,9 +27,10 @@
             </TreeView>
             <GridSplitter Grid.Column="1" Background="LightGray" ResizeDirection="Columns" />
             <Panel Grid.Column="2">
-                <TextBlock Text="{Binding NodeInfoText}" HorizontalAlignment="Center"
-                           VerticalAlignment="Center"
-                           IsVisible="{Binding SelectedImage, Converter={x:Static ObjectConverters.IsNull}}" />
+                <ScrollViewer IsVisible="{Binding SelectedImage, Converter={x:Static ObjectConverters.IsNull}}">
+                    <TextBlock Text="{Binding NodeInfoText}" HorizontalAlignment="Left"
+                               VerticalAlignment="Top" TextWrapping="Wrap" />
+                </ScrollViewer>
                 <Image Source="{Binding SelectedImage}" HorizontalAlignment="Center" VerticalAlignment="Center"
                        IsVisible="{Binding SelectedImage, Converter={x:Static ObjectConverters.IsNotNull}}" />
             </Panel>

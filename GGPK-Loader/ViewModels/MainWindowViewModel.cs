@@ -59,6 +59,12 @@ public partial class MainWindowViewModel(IFileService fileService, IMessageServi
                 _loadingFileTask = ChainImageLoadingTask(_loadingFileTask, oldCts, token, value!.Offset);
                 return;
             }
+
+            if (IsTextFile(fileName))
+            {
+                _loadingFileTask = ChainTextLoadingTask(_loadingFileTask, oldCts, token, value!.Offset);
+                return;
+            }
         }
         else
         {
@@ -162,6 +168,83 @@ public partial class MainWindowViewModel(IFileService fileService, IMessageServi
             if (!token.IsCancellationRequested)
             {
                 SelectedImage = bitmap;
+            }
+        });
+    }
+
+    private static bool IsTextFile(string fileName)
+    {
+        return fileName.EndsWith(".txt", StringComparison.OrdinalIgnoreCase) ||
+               fileName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase) ||
+               fileName.EndsWith(".dat", StringComparison.OrdinalIgnoreCase) ||
+               fileName.EndsWith(".ini", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private Task ChainTextLoadingTask(Task previousTask, CancellationTokenSource? oldCts, CancellationToken token,
+        ulong offset)
+    {
+        return previousTask.ContinueWith(async _ =>
+        {
+            oldCts?.Dispose();
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            try
+            {
+                await LoadTextAsync(offset, token);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to load text: {ex.Message}");
+            }
+        }, TaskScheduler.Default).Unwrap();
+    }
+
+    private async Task LoadTextAsync(ulong offset, CancellationToken token)
+    {
+        if (string.IsNullOrEmpty(_currentFilePath))
+        {
+            return;
+        }
+
+        await using var stream = File.OpenRead(_currentFilePath);
+        using var reader = new BinaryReader(stream);
+
+        stream.Seek((long)offset, SeekOrigin.Begin);
+        var entryLength = reader.ReadUInt32();
+        var entryTag = new string(reader.ReadChars(4));
+
+        if (entryTag != "FILE")
+        {
+            return;
+        }
+
+        var nameLength = reader.ReadUInt32();
+        stream.Seek(32 + nameLength * 2, SeekOrigin.Current); // Skip hash + name
+
+        var headerSize = 4 + 4 + 4 + 32 + nameLength * 2;
+        var dataSize = entryLength - headerSize;
+
+        if (dataSize <= 0)
+        {
+            return;
+        }
+
+        var data = reader.ReadBytes((int)dataSize);
+        if (token.IsCancellationRequested)
+        {
+            return;
+        }
+
+        var text = Encoding.Unicode.GetString(data);
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!token.IsCancellationRequested)
+            {
+                NodeInfoText = text;
             }
         });
     }
