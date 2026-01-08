@@ -1,6 +1,6 @@
 ﻿namespace GGPK_Loader.Models;
 
-internal struct GGPKRoot
+internal struct GGPKHeader
 {
     public uint Length;
 

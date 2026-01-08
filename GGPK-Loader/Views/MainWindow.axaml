@@ -17,7 +17,7 @@
 
     <Grid RowDefinitions="Auto, *">
         <Button Grid.Row="0" Content="{Binding ButtonText}" Margin="5" Command="{Binding OpenGgpkFileCommand}" />
-        <Grid Grid.Row="1" ColumnDefinitions="*, 4, *">
+        <Grid Grid.Row="1" ColumnDefinitions="*, 4, *, 4, *">
             <TreeView Grid.Column="0" ItemsSource="{Binding GgpkNodes}" SelectedItem="{Binding SelectedNode}">
                 <TreeView.ItemTemplate>
                     <TreeDataTemplate ItemsSource="{Binding Children}">
@@ -26,7 +26,17 @@
                 </TreeView.ItemTemplate>
             </TreeView>
             <GridSplitter Grid.Column="1" Background="LightGray" ResizeDirection="Columns" />
-            <Panel Grid.Column="2">
+            
+            <TreeView Grid.Column="2" ItemsSource="{Binding BundleTreeItems}">
+                <TreeView.ItemTemplate>
+                    <TreeDataTemplate ItemsSource="{Binding Children}">
+                        <TextBlock Text="{Binding Value}" />
+                    </TreeDataTemplate>
+                </TreeView.ItemTemplate>
+            </TreeView>
+            <GridSplitter Grid.Column="3" Background="LightGray" ResizeDirection="Columns" />
+
+            <Panel Grid.Column="4">
                 <ScrollViewer IsVisible="{Binding SelectedImage, Converter={x:Static ObjectConverters.IsNull}}">
                     <TextBlock Text="{Binding NodeInfoText}" HorizontalAlignment="Left"
                                VerticalAlignment="Top" TextWrapping="Wrap" />
