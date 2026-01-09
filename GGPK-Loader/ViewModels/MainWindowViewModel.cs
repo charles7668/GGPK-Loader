@@ -56,7 +56,11 @@ public partial class MainWindowViewModel(
 
     partial void OnSelectedBundleInfoNodeChanged(GGPKTreeNode? value)
     {
-        var bundleIndexInfo = (BundleIndexInfo)BundleTreeItems[0].Value;
+        if (BundleTreeItems.Count == 0 || BundleTreeItems[0].Value is not BundleIndexInfo bundleIndexInfo)
+        {
+            return;
+        }
+
         if (value?.Value is not BundleIndexInfo.FileRecord fileRecord ||
             fileRecord.BundleIndex >= bundleIndexInfo.Bundles.Length)
         {
@@ -65,6 +69,40 @@ public partial class MainWindowViewModel(
 
         var bundleName = bundleIndexInfo.Bundles[fileRecord.BundleIndex].Name;
         NodeInfoText = $"\nBundle: {bundleName}";
+
+        var foundNode = FindGgpkNode(bundleName + ".bundle.bin");
+        if (foundNode != null)
+        {
+            var (oldCts, token) = ResetCancellationSource();
+            _loadingFileTask = ChainBundleFileLoadingTask(_loadingFileTask, oldCts, token, foundNode.Offset, fileRecord);
+        }
+    }
+
+    private GGPKTreeNode? FindGgpkNode(string bundleName)
+    {
+        if (GgpkNodes.Count == 0)
+        {
+            return null;
+        }
+
+        var parts = bundleName.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var currentNode = GgpkNodes[0].Children.FirstOrDefault(child => child.Value.ToString() == "Bundles2");
+        if (currentNode == null)
+            return null;
+
+        foreach (var part in parts)
+        {
+            var match = currentNode.Children.FirstOrDefault(child => child.Value.ToString() == part);
+
+            if (match == null)
+            {
+                return null;
+            }
+
+            currentNode = match;
+        }
+
+        return currentNode;
     }
 
     partial void OnSelectedNodeChanged(GGPKTreeNode? value)
@@ -194,6 +232,36 @@ public partial class MainWindowViewModel(
             }
         });
     }
+
+    private Task ChainBundleFileLoadingTask(Task previousTask, CancellationTokenSource? oldCts, CancellationToken token,
+        ulong bundleOffset, BundleIndexInfo.FileRecord fileRecord)
+    {
+        return previousTask.ContinueWith(async _ =>
+        {
+            oldCts?.Dispose();
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            try
+            {
+                var data = await ggpkParsingService.LoadBundleFileDataAsync(_currentFilePath, bundleOffset, fileRecord);
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (!token.IsCancellationRequested)
+                    {
+                        NodeInfoText = Encoding.Unicode.GetString(data);
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to load bundle file: {ex.Message}");
+            }
+        }, TaskScheduler.Default).Unwrap();
+    }
+
 
     private static bool IsTextFile(string fileName)
     {
@@ -360,6 +428,8 @@ public partial class MainWindowViewModel(
             }
         });
     }
+
+    private BundleIndexInfo? _currentBundleIndexInfo;
 
     [RelayCommand]
     private async Task OpenGgpkFile()

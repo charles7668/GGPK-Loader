@@ -68,6 +68,47 @@ public class GgpkParsingService : IGgpkParsingService
         });
     }
 
+    public async Task<byte[]> LoadBundleFileDataAsync(string ggpkFilePath, ulong bundleOffset,
+        BundleIndexInfo.FileRecord fileRecord)
+    {
+        if (string.IsNullOrEmpty(ggpkFilePath))
+        {
+            return [];
+        }
+
+        await using var stream = File.OpenRead(ggpkFilePath);
+        using var reader = new BinaryReader(stream);
+        var fileInfo = ReadGGPKFileInfo(stream, reader, bundleOffset);
+        stream.Seek(fileInfo.DataOffset, SeekOrigin.Begin);
+        var data = reader.ReadBytes((int)fileInfo.DataSize);
+        var dataSpan = new ReadOnlySpan<byte>(data);
+
+        var bundleInfo = ReadBundleInfo(ref dataSpan);
+        var startBlock = Math.DivRem(fileRecord.FileOffset, bundleInfo.Head.UncompressedBlockGranularity,
+            out var remainder);
+        var endBlock =
+            (fileRecord.FileOffset + fileRecord.FileSize - 1) / bundleInfo.Head.UncompressedBlockGranularity + 1;
+
+        var resultBuffer = GC.AllocateUninitializedArray<byte>(endBlock == bundleInfo.Head.BlockCount
+            ? (int)(bundleInfo.UncompressedSize - bundleInfo.Head.UncompressedBlockGranularity * startBlock)
+            : (int)(bundleInfo.Head.UncompressedBlockGranularity * (endBlock - startBlock)));
+
+        DecompressBlocks(bundleInfo, ref dataSpan, resultBuffer, startBlock, endBlock);
+
+        return new ReadOnlySpan<byte>(resultBuffer, (int)remainder, (int)fileRecord.FileSize).ToArray();
+    }
+
+    private static byte[] LoadFileFromBundleData(ReadOnlySpan<byte> data, BundleIndexInfo.FileRecord fileRecord)
+    {
+        var offset = fileRecord.FileOffset;
+        var size = fileRecord.FileSize;
+        var resultSpan = data.Slice((int)offset, (int)size);
+        var result = new byte[size];
+        resultSpan.CopyTo(result);
+        return result;
+    }
+
+
     private static GGPKHeader ReadGGPKHeader(BinaryReader reader)
     {
         var length = reader.ReadUInt32();
@@ -272,17 +313,30 @@ public class GgpkParsingService : IGgpkParsingService
 
     private static int DecompressBlocks(BundleInfo bundleInfo, ref ReadOnlySpan<byte> dataSpan, Span<byte> dest)
     {
-        var decompressedOffset = 0;
+        return DecompressBlocks(bundleInfo, ref dataSpan, dest, 0, bundleInfo.Head.BlockCount);
+    }
 
-        for (var i = 0; i < bundleInfo.Head.BlockCount; i++)
+    private static int DecompressBlocks(BundleInfo bundleInfo, ref ReadOnlySpan<byte> dataSpan, Span<byte> dest,
+        long startBlock, long endBlock)
+    {
+        var firstBlockOffset = 0;
+        for (var i = 0; i < startBlock; i++)
+        {
+            firstBlockOffset += (int)bundleInfo.Head.BlockSizes[i];
+        }
+
+        dataSpan = dataSpan.Slice(firstBlockOffset);
+
+        var decompressedOffset = 0;
+        for (var i = (int)startBlock; i < endBlock; i++)
         {
             var blockSize = bundleInfo.Head.BlockSizes[i];
             var compressedBlock = dataSpan[..(int)blockSize];
             dataSpan = dataSpan[(int)blockSize..];
 
-            var currentUncompressedSize =
-                Math.Min((int)bundleInfo.Head.UncompressedBlockGranularity,
-                    (int)bundleInfo.UncompressedSize - decompressedOffset);
+            var theoreticalOffset = i * bundleInfo.Head.UncompressedBlockGranularity;
+            var currentUncompressedSize = (int)Math.Min(bundleInfo.Head.UncompressedBlockGranularity,
+                bundleInfo.UncompressedSize - theoreticalOffset);
 
             var blockResult = Oo2Core.Decompress(compressedBlock, compressedBlock.Length,
                 dest.Slice(decompressedOffset, currentUncompressedSize),
@@ -402,66 +456,107 @@ public class GgpkParsingService : IGgpkParsingService
     private static void ParsePaths(BundleIndexInfo.PathRepRecord[] pathReps, BundleIndexInfo.FileRecord[] files,
         byte[] directory, GGPKTreeNode rootNode)
     {
-        for (var i = 0; i < pathReps.Length; i++)
-        {
-            var rep = pathReps[i];
-            var fileRecord = files[i];
-            var node = ProcessPathRep(rep, directory, rootNode);
-            if (node == null)
-            {
-                continue;
-            }
+        var fileDict = files.ToDictionary(x => x.Hash, x => x);
+        ProcessPathRep(pathReps, fileDict, directory, rootNode);
+    }
 
-            files[i] = fileRecord with { FileName = node.Value.ToString()! };
-            node.Value = files[i];
+    private static void ProcessPathRep(IEnumerable<BundleIndexInfo.PathRepRecord> reps,
+        Dictionary<ulong, BundleIndexInfo.FileRecord> fileRecordsDict, byte[] directory,
+        GGPKTreeNode rootNode)
+    {
+        foreach (var rep in reps)
+        {
+            var temp = new List<string>();
+            var isBase = false;
+
+            var offset = (int)rep.PayloadOffset;
+            var limit = offset + (int)rep.PayloadSize - 4;
+
+            while (offset <= limit)
+            {
+                var index = BitConverter.ToInt32(directory, offset);
+                offset += 4;
+
+                if (index == 0)
+                {
+                    isBase = !isBase;
+                    if (isBase)
+                    {
+                        temp.Clear();
+                    }
+
+                    continue;
+                }
+
+                index -= 1;
+
+                var str = ReadNullTerminatedString(directory, ref offset);
+
+                if (index < temp.Count)
+                {
+                    str = temp[index] + str;
+                }
+
+                if (isBase)
+                {
+                    temp.Add(str);
+                }
+                else
+                {
+                    if (fileRecordsDict.TryGetValue(MurmurHash64A(str.Select(x => (byte)x).ToArray()),
+                            out var fileRecord))
+                    {
+                        AddFileToBundleTree(rootNode, str, ref fileRecord);
+                    }
+                }
+            }
         }
     }
 
-    private static GGPKTreeNode? ProcessPathRep(BundleIndexInfo.PathRepRecord rep, byte[] directory,
-        GGPKTreeNode rootNode)
+    private static ulong MurmurHash64A(ReadOnlySpan<byte> utf8Name, ulong seed = 0x1337B33F)
     {
-        var temp = new List<string>();
-        var isBase = false;
+        if (utf8Name.IsEmpty)
+            return 0xF42A94E69CFF42FEul;
 
-        var offset = (int)rep.PayloadOffset;
-        var limit = offset + (int)rep.PayloadSize - 4;
+        if (utf8Name[^1] == '/')
+            utf8Name = utf8Name[..^1];
 
-        while (offset <= limit)
+        const ulong m = 0xC6A4A7935BD1E995ul;
+        const int r = 47;
+
+        unchecked
         {
-            var index = BitConverter.ToInt32(directory, offset);
-            offset += 4;
+            seed ^= (ulong)utf8Name.Length * m;
 
-            if (index == 0)
+            while (utf8Name.Length >= 8)
             {
-                isBase = !isBase;
-                if (isBase)
+                var k = BinaryPrimitives.ReadUInt64LittleEndian(utf8Name);
+                k *= m;
+                k ^= k >> r;
+                k *= m;
+
+                seed ^= k;
+                seed *= m;
+
+                utf8Name = utf8Name[8..];
+            }
+
+            if (utf8Name.Length > 0)
+            {
+                ulong tail = 0;
+                for (var i = 0; i < utf8Name.Length; i++)
                 {
-                    temp.Clear();
+                    tail |= (ulong)utf8Name[i] << (i * 8);
                 }
 
-                continue;
+                seed ^= tail;
+                seed *= m;
             }
 
-            index -= 1;
-
-            var str = ReadNullTerminatedString(directory, ref offset);
-
-            if (index < temp.Count)
-            {
-                str = temp[index] + str;
-            }
-
-            if (isBase)
-            {
-                temp.Add(str);
-            }
-            else
-            {
-                return AddPathToTree(rootNode, str);
-            }
+            seed ^= seed >> r;
+            seed *= m;
+            return seed ^ (seed >> r);
         }
-
-        return null;
     }
 
     private static string ReadNullTerminatedString(byte[] directory, ref int offset)
@@ -477,7 +572,7 @@ public class GgpkParsingService : IGgpkParsingService
         return str;
     }
 
-    private static GGPKTreeNode AddPathToTree(GGPKTreeNode root, string path)
+    private static void AddFileToBundleTree(GGPKTreeNode root, string path, ref BundleIndexInfo.FileRecord fileRecord)
     {
         var parts = path.Split('/');
         var currentNode = root;
@@ -510,6 +605,7 @@ public class GgpkParsingService : IGgpkParsingService
             currentNode = foundChild;
         }
 
-        return currentNode;
+        fileRecord = fileRecord with { FileName = parts[^1] };
+        currentNode.Value = fileRecord;
     }
 }
