@@ -13,11 +13,22 @@ public record BundleIndexInfo
     public PathRepRecord[] PathReps { get; init; } = [];
     public byte[] PathRepBundle { get; init; } = [];
 
+    public override string ToString()
+    {
+        return "/";
+    }
+
     [UsedImplicitly(ImplicitUseTargetFlags.WithMembers)]
     public record BundleRecord(uint NameLength, string Name, uint UncompressedSize);
 
     [UsedImplicitly(ImplicitUseTargetFlags.WithMembers)]
-    public record FileRecord(ulong Hash, uint BundleIndex, uint FileOffset, uint FileSize);
+    public record FileRecord(ulong Hash, uint BundleIndex, uint FileOffset, uint FileSize, string FileName = "")
+    {
+        public override string ToString()
+        {
+            return FileName;
+        }
+    }
 
     [UsedImplicitly(ImplicitUseTargetFlags.WithMembers)]
     public record PathRepRecord(ulong Hash, uint PayloadOffset, uint PayloadSize, uint PayloadRecursiveSize);

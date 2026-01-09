@@ -26,8 +26,9 @@
                 </TreeView.ItemTemplate>
             </TreeView>
             <GridSplitter Grid.Column="1" Background="LightGray" ResizeDirection="Columns" />
-            
-            <TreeView Grid.Column="2" ItemsSource="{Binding BundleTreeItems}">
+
+            <TreeView Grid.Column="2" ItemsSource="{Binding BundleTreeItems}"
+                      SelectedItem="{Binding SelectedBundleInfoNode}">
                 <TreeView.ItemTemplate>
                     <TreeDataTemplate ItemsSource="{Binding Children}">
                         <TextBlock Text="{Binding Value}" />

@@ -28,6 +28,7 @@ namespace GGPK_Loader
                 collection.AddSingleton<MainWindow>();
                 collection.AddSingleton<IFileService>(sp => new FileService(sp.GetRequiredService<MainWindow>()));
                 collection.AddSingleton<IMessageService>(sp => new MessageService(sp.GetRequiredService<MainWindow>()));
+                collection.AddSingleton<IGgpkParsingService, GgpkParsingService>();
                 collection.AddSingleton<MainWindowViewModel>();
 
                 var services = collection.BuildServiceProvider();
