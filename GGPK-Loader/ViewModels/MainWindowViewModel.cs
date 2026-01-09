@@ -56,7 +56,11 @@ public partial class MainWindowViewModel(
 
     partial void OnSelectedBundleInfoNodeChanged(GGPKTreeNode? value)
     {
-        var bundleIndexInfo = (BundleIndexInfo)BundleTreeItems[0].Value;
+        if (BundleTreeItems.Count == 0 || BundleTreeItems[0].Value is not BundleIndexInfo bundleIndexInfo)
+        {
+            return;
+        }
+
         if (value?.Value is not BundleIndexInfo.FileRecord fileRecord ||
             fileRecord.BundleIndex >= bundleIndexInfo.Bundles.Length)
         {
@@ -65,6 +69,45 @@ public partial class MainWindowViewModel(
 
         var bundleName = bundleIndexInfo.Bundles[fileRecord.BundleIndex].Name;
         NodeInfoText = $"\nBundle: {bundleName}";
+
+        var foundNode = FindGgpkNode(bundleName);
+        if (foundNode != null)
+        {
+            NodeInfoText += foundNode.Value;
+        }
+    }
+
+    private GGPKTreeNode? FindGgpkNode(string bundleName)
+    {
+        if (GgpkNodes.Count == 0)
+        {
+            return null;
+        }
+
+        var parts = bundleName.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var currentNode = GgpkNodes[0];
+
+        foreach (var part in parts)
+        {
+            GGPKTreeNode? match = null;
+            foreach (var child in currentNode.Children)
+            {
+                if (child.Value?.ToString() == part)
+                {
+                    match = child;
+                    break;
+                }
+            }
+
+            if (match == null)
+            {
+                return null;
+            }
+
+            currentNode = match;
+        }
+
+        return currentNode;
     }
 
     partial void OnSelectedNodeChanged(GGPKTreeNode? value)
