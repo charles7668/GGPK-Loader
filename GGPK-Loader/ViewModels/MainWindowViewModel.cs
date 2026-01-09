@@ -247,6 +247,16 @@ public partial class MainWindowViewModel(
             try
             {
                 var data = await ggpkParsingService.LoadBundleFileDataAsync(_currentFilePath, bundleOffset, fileRecord);
+                if (!token.IsCancellationRequested)
+                {
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        if (!token.IsCancellationRequested)
+                        {
+                            NodeInfoText = Encoding.Unicode.GetString(data);
+                        }
+                    });
+                }
             }
             catch (Exception ex)
             {
