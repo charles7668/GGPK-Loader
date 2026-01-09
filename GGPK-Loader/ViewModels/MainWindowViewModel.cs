@@ -85,7 +85,9 @@ public partial class MainWindowViewModel(
         }
 
         var parts = bundleName.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        var currentNode = GgpkNodes[0];
+        var currentNode = GgpkNodes[0].Children.FirstOrDefault(child => child.Value.ToString() == "Bundles2");
+        if (currentNode == null)
+            return null;
 
         foreach (var part in parts)
         {
