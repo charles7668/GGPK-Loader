@@ -62,7 +62,7 @@ public class GgpkParsingService : IGgpkParsingService
         return await Task.Run(() =>
         {
             var bundleRootNode =
-                ggpkRootNode.Children.FirstOrDefault(child => (string)child.Value == "/Bundles2");
+                ggpkRootNode.Children.FirstOrDefault(child => (string)child.Value == "Bundles2");
 
             return bundleRootNode == null ? null : ProcessBundle(bundleRootNode, ggpkFilePath);
         });
@@ -112,7 +112,7 @@ public class GgpkParsingService : IGgpkParsingService
         var headerSize = 4 + 4 + 4 + 32 + fileNameLength * 2;
         var dataSize = entryLength - headerSize;
 
-        var fileNode = new GGPKTreeNode((currentNode.Value + "/" + fileName).Replace("//", "/"), currentOffset);
+        var fileNode = new GGPKTreeNode(fileName, currentOffset);
         currentNode.Children.Add(fileNode);
 
         Debug.WriteLine($"FILE Name: {fileNode.Value}, Size: {dataSize}");
@@ -127,7 +127,7 @@ public class GgpkParsingService : IGgpkParsingService
         var nameBytes = reader.ReadBytes((int)nameLength * 2);
         var name = Encoding.Unicode.GetString(nameBytes).TrimEnd('\0');
 
-        var nextNode = new GGPKTreeNode((currentNode.Value + "/" + name).Replace("//", "/"), currentNode.Offset);
+        var nextNode = new GGPKTreeNode(name, currentNode.Offset);
         currentNode.Children.Add(nextNode);
         Debug.WriteLine($"PDIR Name: {nextNode.Value}");
 
