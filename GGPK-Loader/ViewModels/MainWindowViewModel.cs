@@ -74,7 +74,7 @@ public partial class MainWindowViewModel(
         if (foundNode != null)
         {
             var (oldCts, token) = ResetCancellationSource();
-            _loadingFileTask = ChainBundleFileLoadingTask(_loadingFileTask, oldCts, token, foundNode.Offset);
+            _loadingFileTask = ChainBundleFileLoadingTask(_loadingFileTask, oldCts, token, foundNode.Offset, fileRecord);
         }
     }
 
@@ -234,7 +234,7 @@ public partial class MainWindowViewModel(
     }
 
     private Task ChainBundleFileLoadingTask(Task previousTask, CancellationTokenSource? oldCts, CancellationToken token,
-        ulong bundleOffset)
+        ulong bundleOffset, BundleIndexInfo.FileRecord fileRecord)
     {
         return previousTask.ContinueWith(async _ =>
         {
@@ -246,7 +246,7 @@ public partial class MainWindowViewModel(
 
             try
             {
-                var data = await ggpkParsingService.LoadBundleFileDataAsync(_currentFilePath, bundleOffset);
+                var data = await ggpkParsingService.LoadBundleFileDataAsync(_currentFilePath, bundleOffset, fileRecord);
             }
             catch (Exception ex)
             {

@@ -68,7 +68,8 @@ public class GgpkParsingService : IGgpkParsingService
         });
     }
 
-    public async Task<byte[]> LoadBundleFileDataAsync(string ggpkFilePath, ulong bundleFileOffset)
+    public async Task<byte[]> LoadBundleFileDataAsync(string ggpkFilePath, ulong bundleOffset,
+        BundleIndexInfo.FileRecord fileRecord)
     {
         if (string.IsNullOrEmpty(ggpkFilePath))
         {
@@ -77,20 +78,33 @@ public class GgpkParsingService : IGgpkParsingService
 
         await using var stream = File.OpenRead(ggpkFilePath);
         using var reader = new BinaryReader(stream);
-        var fileInfo = ReadGGPKFileInfo(stream, reader, bundleFileOffset);
+        var fileInfo = ReadGGPKFileInfo(stream, reader, bundleOffset);
         stream.Seek(fileInfo.DataOffset, SeekOrigin.Begin);
         var data = reader.ReadBytes((int)fileInfo.DataSize);
 
         var bundleInfo = ReadBundleInfo(data);
-        
-        return data;
+        var decompressed = new byte[bundleInfo.UncompressedSize];
+        var decompresedSize = DecompressOodleBundle(data, decompressed);
+        if (decompresedSize != bundleInfo.UncompressedSize)
+        {
+            return [];
+        }
+
+        var result = LoadFileFromBundleData(decompressed, fileRecord);
+
+        return result;
     }
 
-    private static BundleInfo ReadBundleInfo(byte[] data)
+    private static byte[] LoadFileFromBundleData(ReadOnlySpan<byte> data, BundleIndexInfo.FileRecord fileRecord)
     {
-        var dataSpan = new ReadOnlySpan<byte>(data);
-        return ReadBundleInfo(ref dataSpan);
+        var offset = fileRecord.FileOffset;
+        var size = fileRecord.FileSize;
+        var resultSpan = data.Slice((int)offset, (int)size);
+        var result = new byte[size];
+        resultSpan.CopyTo(result);
+        return result;
     }
+
 
     private static GGPKHeader ReadGGPKHeader(BinaryReader reader)
     {
@@ -237,6 +251,12 @@ public class GgpkParsingService : IGgpkParsingService
             DataOffset = dataOffset,
             DataSize = dataSize
         };
+    }
+
+    private static BundleInfo ReadBundleInfo(byte[] data)
+    {
+        var dataSpan = new ReadOnlySpan<byte>(data);
+        return ReadBundleInfo(ref dataSpan);
     }
 
     private static BundleInfo ReadBundleInfo(ref ReadOnlySpan<byte> reader)
