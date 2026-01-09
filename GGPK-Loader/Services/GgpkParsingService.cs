@@ -68,6 +68,30 @@ public class GgpkParsingService : IGgpkParsingService
         });
     }
 
+    public async Task<byte[]> LoadBundleFileDataAsync(string ggpkFilePath, ulong bundleFileOffset)
+    {
+        if (string.IsNullOrEmpty(ggpkFilePath))
+        {
+            return [];
+        }
+
+        await using var stream = File.OpenRead(ggpkFilePath);
+        using var reader = new BinaryReader(stream);
+        var fileInfo = ReadGGPKFileInfo(stream, reader, bundleFileOffset);
+        stream.Seek(fileInfo.DataOffset, SeekOrigin.Begin);
+        var data = reader.ReadBytes((int)fileInfo.DataSize);
+
+        var bundleInfo = ReadBundleInfo(data);
+        
+        return data;
+    }
+
+    private static BundleInfo ReadBundleInfo(byte[] data)
+    {
+        var dataSpan = new ReadOnlySpan<byte>(data);
+        return ReadBundleInfo(ref dataSpan);
+    }
+
     private static GGPKHeader ReadGGPKHeader(BinaryReader reader)
     {
         var length = reader.ReadUInt32();
