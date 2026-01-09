@@ -70,7 +70,7 @@ public partial class MainWindowViewModel(
         var bundleName = bundleIndexInfo.Bundles[fileRecord.BundleIndex].Name;
         NodeInfoText = $"\nBundle: {bundleName}";
 
-        var foundNode = FindGgpkNode(bundleName);
+        var foundNode = FindGgpkNode(bundleName + ".bundle.bin");
         if (foundNode != null)
         {
             NodeInfoText += foundNode.Value;
