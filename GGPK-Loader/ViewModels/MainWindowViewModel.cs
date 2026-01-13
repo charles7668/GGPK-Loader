@@ -247,10 +247,16 @@ public partial class MainWindowViewModel(
 
             try
             {
-                var data = await ggpkParsingService.LoadBundleFileDataAsync(_currentFilePath, bundleOffset,
-                    fileRecord);
                 if (IsTextFile(fileRecord.FileName))
                 {
+                    var partialRecord = fileRecord;
+                    if (fileRecord.FileSize > 2 * 1024 * 1024)
+                    {
+                        partialRecord = fileRecord with { FileSize = 2 * 1024 * 1024 };
+                    }
+
+                    var data = await ggpkParsingService.LoadBundleFileDataAsync(_currentFilePath, bundleOffset,
+                        partialRecord);
                     Dispatcher.UIThread.Post(() =>
                     {
                         if (!token.IsCancellationRequested)
