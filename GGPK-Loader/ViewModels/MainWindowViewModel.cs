@@ -48,7 +48,7 @@ public partial class MainWindowViewModel(
 
     [ObservableProperty]
     private GGPKTreeNode? _selectedNode;
-    
+
     [ObservableProperty]
     private GGPKTreeNode? _selectedBundleInfoNode;
 
@@ -74,7 +74,8 @@ public partial class MainWindowViewModel(
         if (foundNode != null)
         {
             var (oldCts, token) = ResetCancellationSource();
-            _loadingFileTask = ChainBundleFileLoadingTask(_loadingFileTask, oldCts, token, foundNode.Offset, fileRecord);
+            _loadingFileTask =
+                ChainBundleFileLoadingTask(_loadingFileTask, oldCts, token, foundNode.Offset, fileRecord);
         }
     }
 
@@ -246,18 +247,23 @@ public partial class MainWindowViewModel(
 
             try
             {
-                var data = await ggpkParsingService.LoadBundleFileDataAsync(_currentFilePath, bundleOffset, fileRecord);
-                Dispatcher.UIThread.Post(() =>
+                var data = await ggpkParsingService.LoadBundleFileDataAsync(_currentFilePath, bundleOffset,
+                    fileRecord);
+                if (IsTextFile(fileRecord.FileName))
                 {
-                    if (!token.IsCancellationRequested)
+                    Dispatcher.UIThread.Post(() =>
                     {
-                        NodeInfoText = Encoding.Unicode.GetString(data);
-                    }
-                });
+                        if (!token.IsCancellationRequested)
+                        {
+                            NodeInfoText = Encoding.Unicode.GetString(data);
+                        }
+                    });
+                }
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"Failed to load bundle file: {ex.Message}");
+                await messageService.ShowErrorMessageAsync($"Failed to load bundle file: {ex.Message}");
             }
         }, TaskScheduler.Default).Unwrap();
     }
