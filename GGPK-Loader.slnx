@@ -1,3 +1,9 @@
 <Solution>
-  <Project Path="GGPK-Loader/GGPK-Loader.csproj" />
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+  </Configurations>
+  <Project Path="GGPK-Loader/GGPK-Loader.csproj">
+    <Platform Solution="Debug|x64" Project="x64" />
+  </Project>
 </Solution>

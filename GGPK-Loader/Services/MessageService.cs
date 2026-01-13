@@ -9,21 +9,23 @@ public class MessageService(Window target) : IMessageService
 {
     public async Task ShowErrorMessageAsync(string message)
     {
-        var dialog = new Window
+        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(async () =>
         {
-            Title = "Error",
-            Width = 300,
-            Height = 150,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Content = new TextBlock
+            var dialog = new Window
             {
-                Text = message,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                TextWrapping = TextWrapping.Wrap
-            }
-        };
-
-        await dialog.ShowDialog(target);
+                Title = "Error",
+                Width = 300,
+                Height = 150,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Content = new TextBlock
+                {
+                    Text = message,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    TextWrapping = TextWrapping.Wrap
+                }
+            };
+            await dialog.ShowDialog(target);
+        });
     }
 }

@@ -3,15 +3,19 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia;
 using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using GGPK_Loader.Models;
 using GGPK_Loader.Services;
+using GGPK_Loader.Utils;
 using JetBrains.Annotations;
 using File = System.IO.File;
 
@@ -234,6 +238,140 @@ public partial class MainWindowViewModel(
         });
     }
 
+    private bool IsCompressedFormat(DirectXTex.DXGI_FORMAT format, out DirectXTex.DXGI_FORMAT targetFormat)
+    {
+        switch (format)
+        {
+            case DirectXTex.DXGI_FORMAT.BC1_TYPELESS:
+            case DirectXTex.DXGI_FORMAT.BC1_UNORM:
+            case DirectXTex.DXGI_FORMAT.BC1_UNORM_SRGB:
+            case DirectXTex.DXGI_FORMAT.BC2_TYPELESS:
+            case DirectXTex.DXGI_FORMAT.BC2_UNORM:
+            case DirectXTex.DXGI_FORMAT.BC2_UNORM_SRGB:
+            case DirectXTex.DXGI_FORMAT.BC3_TYPELESS:
+            case DirectXTex.DXGI_FORMAT.BC3_UNORM:
+            case DirectXTex.DXGI_FORMAT.BC3_UNORM_SRGB:
+            case DirectXTex.DXGI_FORMAT.BC4_SNORM:
+            case DirectXTex.DXGI_FORMAT.BC4_TYPELESS:
+            case DirectXTex.DXGI_FORMAT.BC4_UNORM:
+            case DirectXTex.DXGI_FORMAT.BC5_SNORM:
+            case DirectXTex.DXGI_FORMAT.BC5_TYPELESS:
+            case DirectXTex.DXGI_FORMAT.BC5_UNORM:
+            case DirectXTex.DXGI_FORMAT.BC7_TYPELESS:
+            case DirectXTex.DXGI_FORMAT.BC7_UNORM:
+            case DirectXTex.DXGI_FORMAT.BC7_UNORM_SRGB:
+                targetFormat = DirectXTex.DXGI_FORMAT.R8G8B8A8_UNORM;
+                return true;
+            default:
+                targetFormat = format;
+                return false;
+        }
+    }
+
+    private async Task<Bitmap?> ResolveDDSDataAsync(byte[] data)
+    {
+        var scratchImage = new DirectXTex.ScratchImage();
+        var decompressedScratch = new DirectXTex.ScratchImage();
+        try
+        {
+            var hr = DirectXTex.GetMetadataFromDDSMemory(data, 0, out var metadata);
+            if (hr != 0)
+            {
+                await messageService.ShowErrorMessageAsync("Failed to resolve DDS data");
+                return null;
+            }
+
+            Debug.WriteLine($"Metadata Width: {metadata.width}, Height: {metadata.height}, Format: {metadata.format}");
+
+            hr = DirectXTex.LoadFromDDSMemory(data, 0, ref metadata, ref scratchImage);
+            if (hr != 0)
+            {
+                await messageService.ShowErrorMessageAsync("Failed to resolve DDS data");
+                return null;
+            }
+
+            Debug.WriteLine($"Load Result: {hr}, Images: {scratchImage.nimages}, Size: {scratchImage.size}");
+            if (scratchImage.nimages > 0)
+            {
+                var image = Marshal.PtrToStructure<DirectXTex.Image>(scratchImage.image);
+                Debug.WriteLine(
+                    $"Image Width: {image.width}, Height: {image.height}, Format: {image.format}, RowPitch: {image.rowPitch}");
+
+                var isCompressed = IsCompressedFormat(image.format, out var targetFormat);
+
+                if (isCompressed)
+                {
+                    Debug.WriteLine(
+                        $"Format {image.format} is compressed. Attempting to decompress to {targetFormat}...");
+                    hr = DirectXTex.Decompress(ref image, targetFormat, ref decompressedScratch);
+                    if (hr >= 0)
+                    {
+                        Debug.WriteLine("Decompression successful.");
+                        image = Marshal.PtrToStructure<DirectXTex.Image>(decompressedScratch.image);
+                    }
+                    else
+                    {
+                        Debug.WriteLine($"Decompression failed with HRESULT {hr:X}");
+                        await messageService.ShowErrorMessageAsync($"Decompression failed with HRESULT {hr:X}");
+                        return null;
+                    }
+                }
+
+                if (image.format == targetFormat)
+                {
+                    var bitmap = new WriteableBitmap(
+                        new PixelSize((int)image.width, (int)image.height),
+                        new Vector(96, 96),
+                        PixelFormat.Bgra8888,
+                        AlphaFormat.Premul);
+
+                    using var buffer = bitmap.Lock();
+                    var dest = buffer.Address;
+                    var src = image.pixels;
+                    var height = (int)image.height;
+                    var rowPitch = (int)image.rowPitch;
+
+                    for (var i = 0; i < height; i++)
+                    {
+                        unsafe
+                        {
+                            Buffer.MemoryCopy((void*)(src + i * rowPitch), (void*)(dest + i * rowPitch),
+                                rowPitch, rowPitch);
+                        }
+                    }
+
+                    return bitmap;
+                }
+                else
+                {
+                    Debug.WriteLine(
+                        $"Format {image.format} not supported for direct display demo yet (Target: {targetFormat}).");
+                    await messageService.ShowErrorMessageAsync(
+                        $"Format {image.format} not supported for direct display demo yet (Target: {targetFormat}).");
+                    return null;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            await messageService.ShowErrorMessageAsync(ex.Message);
+        }
+        finally
+        {
+            try
+            {
+                DirectXTex.Release(ref decompressedScratch);
+                DirectXTex.Release(ref scratchImage);
+            }
+            catch
+            {
+                // ignore
+            }
+        }
+
+        return null;
+    }
+
     private Task ChainBundleFileLoadingTask(Task previousTask, CancellationTokenSource? oldCts, CancellationToken token,
         ulong bundleOffset, BundleIndexInfo.FileRecord fileRecord)
     {
@@ -265,6 +403,13 @@ public partial class MainWindowViewModel(
                         }
                     });
                 }
+                else if (IsDDSFile(fileRecord.FileName))
+                {
+                    var data = await ggpkParsingService.LoadBundleFileDataAsync(_currentFilePath, bundleOffset,
+                        fileRecord);
+                    var image = await ResolveDDSDataAsync(data);
+                    SelectedImage = image;
+                }
             }
             catch (Exception ex)
             {
@@ -281,6 +426,11 @@ public partial class MainWindowViewModel(
                fileName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase) ||
                fileName.EndsWith(".dat", StringComparison.OrdinalIgnoreCase) ||
                fileName.EndsWith(".ini", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsDDSFile(string fileName)
+    {
+        return fileName.EndsWith(".dds", StringComparison.OrdinalIgnoreCase);
     }
 
     private Task ChainTextLoadingTask(Task previousTask, CancellationTokenSource? oldCts, CancellationToken token,
