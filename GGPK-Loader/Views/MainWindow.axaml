@@ -38,10 +38,9 @@
             <GridSplitter Grid.Column="3" Background="LightGray" ResizeDirection="Columns" />
 
             <Panel Grid.Column="4">
-                <ScrollViewer IsVisible="{Binding SelectedImage, Converter={x:Static ObjectConverters.IsNull}}">
-                    <TextBlock Text="{Binding NodeInfoText}" HorizontalAlignment="Left"
-                               VerticalAlignment="Top" TextWrapping="Wrap" />
-                </ScrollViewer>
+                <TextBox Text="{Binding NodeInfoText}" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         IsVisible="{Binding SelectedImage, Converter={x:Static ObjectConverters.IsNull}}" />
                 <Image Source="{Binding SelectedImage}" HorizontalAlignment="Center" VerticalAlignment="Center"
                        IsVisible="{Binding SelectedImage, Converter={x:Static ObjectConverters.IsNotNull}}" />
             </Panel>
