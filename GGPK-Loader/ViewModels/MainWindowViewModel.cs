@@ -17,7 +17,6 @@ using GGPK_Loader.Models;
 using GGPK_Loader.Services;
 using GGPK_Loader.Utils;
 using JetBrains.Annotations;
-using File = System.IO.File;
 
 namespace GGPK_Loader.ViewModels;
 
@@ -35,8 +34,6 @@ public partial class MainWindowViewModel(
 
     [ObservableProperty]
     private string _buttonText = "Open";
-
-    private string _currentFilePath = "";
 
     [ObservableProperty]
     private ObservableCollection<GGPKTreeNode> _ggpkNodes = new();
@@ -75,11 +72,11 @@ public partial class MainWindowViewModel(
         NodeInfoText = $"\nBundle: {bundleName}";
 
         var foundNode = FindGgpkNode(bundleName + ".bundle.bin");
-        if (foundNode != null)
+        if (foundNode?.Value is GGPKFileInfo ggpkFileInfo)
         {
             var (oldCts, token) = ResetCancellationSource();
             _loadingFileTask =
-                ChainBundleFileLoadingTask(_loadingFileTask, oldCts, token, foundNode.Offset, fileRecord);
+                ChainBundleFileLoadingTask(_loadingFileTask, oldCts, token, ggpkFileInfo, fileRecord);
         }
     }
 
@@ -115,24 +112,25 @@ public partial class MainWindowViewModel(
         var (oldCts, token) = ResetCancellationSource();
         SelectedImage = null;
 
-        if (ShouldProcessNode(value, out var fileName))
+        if (ShouldProcessNode(value, out var nodeValue))
         {
-            NodeInfoText = fileName;
-            if (IsImageFile(fileName))
+            var fileInfo = nodeValue!;
+            NodeInfoText = fileInfo.FileName;
+            if (IsImageFile(fileInfo.FileName))
             {
-                _loadingFileTask = ChainImageLoadingTask(_loadingFileTask, oldCts, token, value!.Offset);
+                _loadingFileTask = ChainImageLoadingTask(_loadingFileTask, oldCts, token, fileInfo);
                 return;
             }
 
-            if (IsTextFile(fileName))
+            if (IsTextFile(fileInfo.FileName))
             {
-                _loadingFileTask = ChainTextLoadingTask(_loadingFileTask, oldCts, token, value!.Offset);
+                _loadingFileTask = ChainTextLoadingTask(_loadingFileTask, oldCts, token, fileInfo);
                 return;
             }
 
-            if (IsGgdhFile(fileName))
+            if (IsGgdhFile(fileInfo.FileName))
             {
-                _loadingFileTask = ChainGgdhLoadingTask(_loadingFileTask, oldCts, token, value!.Offset);
+                _loadingFileTask = ChainGgdhLoadingTask(_loadingFileTask, oldCts, token, fileInfo);
                 return;
             }
         }
@@ -149,16 +147,16 @@ public partial class MainWindowViewModel(
         return (oldCts, _loadingFileCts.Token);
     }
 
-    private static bool ShouldProcessNode(GGPKTreeNode? node, out string fileName)
+    private static bool ShouldProcessNode(GGPKTreeNode? node, out GGPKFileInfo? fileInfo)
     {
-        fileName = string.Empty;
-        if (node is { Children.Count: 0 })
+        fileInfo = null;
+        if (node?.Value is not GGPKFileInfo info)
         {
-            fileName = node.Value?.ToString() ?? string.Empty;
-            return true;
+            return false;
         }
 
-        return false;
+        fileInfo = info;
+        return true;
     }
 
     private static bool IsImageFile(string fileName)
@@ -169,7 +167,7 @@ public partial class MainWindowViewModel(
     }
 
     private Task ChainImageLoadingTask(Task previousTask, CancellationTokenSource? oldCts, CancellationToken token,
-        ulong offset)
+        GGPKFileInfo fileInfo)
     {
         return previousTask.ContinueWith(async _ =>
         {
@@ -181,7 +179,11 @@ public partial class MainWindowViewModel(
 
             try
             {
-                await LoadImageAsync(offset, token);
+                await LoadImageAsync(fileInfo, token);
+            }
+            catch (OperationCanceledException)
+            {
+                // ignore
             }
             catch (Exception ex)
             {
@@ -190,55 +192,19 @@ public partial class MainWindowViewModel(
         }, TaskScheduler.Default).Unwrap();
     }
 
-    private async Task LoadImageAsync(ulong offset, CancellationToken token)
+    private async Task LoadImageAsync(GGPKFileInfo fileInfo, CancellationToken token)
     {
-        if (string.IsNullOrEmpty(_currentFilePath))
-        {
-            return;
-        }
-
-        await using var stream = File.OpenRead(_currentFilePath);
-        using var reader = new BinaryReader(stream);
-
-        stream.Seek((long)offset, SeekOrigin.Begin);
-        var entryLength = reader.ReadUInt32();
-        var entryTag = new string(reader.ReadChars(4));
-
-        if (entryTag != "FILE")
-        {
-            return;
-        }
-
-        var nameLength = reader.ReadUInt32();
-        stream.Seek(32 + nameLength * 2, SeekOrigin.Current); // Skip hash + name
-
-        var headerSize = 4 + 4 + 4 + 32 + nameLength * 2;
-        var dataSize = entryLength - headerSize;
-
-        if (dataSize <= 0)
-        {
-            return;
-        }
-
-        var data = reader.ReadBytes((int)dataSize);
-        if (token.IsCancellationRequested)
-        {
-            return;
-        }
-
-        using var memoryStream = new MemoryStream(data);
-        var bitmap = new Bitmap(memoryStream);
-
+        var imageData = await ggpkParsingService.LoadGGPKFileDataAsync(fileInfo, token);
+        var ms = new MemoryStream(imageData);
+        var image = new Bitmap(ms);
         Dispatcher.UIThread.Post(() =>
         {
-            if (!token.IsCancellationRequested)
-            {
-                SelectedImage = bitmap;
-            }
+            SelectedImage?.Dispose();
+            SelectedImage = image;
         });
     }
 
-    private bool IsCompressedFormat(DirectXTex.DXGI_FORMAT format, out DirectXTex.DXGI_FORMAT targetFormat)
+    private static bool IsCompressedFormat(DirectXTex.DXGI_FORMAT format, out DirectXTex.DXGI_FORMAT targetFormat)
     {
         switch (format)
         {
@@ -373,7 +339,7 @@ public partial class MainWindowViewModel(
     }
 
     private Task ChainBundleFileLoadingTask(Task previousTask, CancellationTokenSource? oldCts, CancellationToken token,
-        ulong bundleOffset, BundleIndexInfo.FileRecord fileRecord)
+        GGPKFileInfo bundleFileInfo, BundleIndexInfo.FileRecord fileRecord)
     {
         return previousTask.ContinueWith(async _ =>
         {
@@ -393,8 +359,8 @@ public partial class MainWindowViewModel(
                         partialRecord = fileRecord with { FileSize = 2 * 1024 * 1024 };
                     }
 
-                    var data = await ggpkParsingService.LoadBundleFileDataAsync(_currentFilePath, bundleOffset,
-                        partialRecord);
+                    var data = await ggpkParsingService.LoadBundleFileDataAsync(bundleFileInfo,
+                        partialRecord, token);
                     Dispatcher.UIThread.Post(() =>
                     {
                         if (!token.IsCancellationRequested)
@@ -405,8 +371,8 @@ public partial class MainWindowViewModel(
                 }
                 else if (IsDDSFile(fileRecord.FileName))
                 {
-                    var data = await ggpkParsingService.LoadBundleFileDataAsync(_currentFilePath, bundleOffset,
-                        fileRecord);
+                    var data = await ggpkParsingService.LoadBundleFileDataAsync(bundleFileInfo,
+                        fileRecord, token);
                     var image = await ResolveDDSDataAsync(data);
                     SelectedImage = image;
                 }
@@ -418,7 +384,6 @@ public partial class MainWindowViewModel(
             }
         }, TaskScheduler.Default).Unwrap();
     }
-
 
     private static bool IsTextFile(string fileName)
     {
@@ -434,7 +399,7 @@ public partial class MainWindowViewModel(
     }
 
     private Task ChainTextLoadingTask(Task previousTask, CancellationTokenSource? oldCts, CancellationToken token,
-        ulong offset)
+        GGPKFileInfo fileInfo)
     {
         return previousTask.ContinueWith(async _ =>
         {
@@ -446,7 +411,11 @@ public partial class MainWindowViewModel(
 
             try
             {
-                await LoadTextAsync(offset, token);
+                await LoadTextAsync(fileInfo, token);
+            }
+            catch (OperationCanceledException)
+            {
+                // ignore
             }
             catch (Exception ex)
             {
@@ -455,42 +424,9 @@ public partial class MainWindowViewModel(
         }, TaskScheduler.Default).Unwrap();
     }
 
-    private async Task LoadTextAsync(ulong offset, CancellationToken token)
+    private async Task LoadTextAsync(GGPKFileInfo ggpkFileInfo, CancellationToken token)
     {
-        if (string.IsNullOrEmpty(_currentFilePath))
-        {
-            return;
-        }
-
-        await using var stream = File.OpenRead(_currentFilePath);
-        using var reader = new BinaryReader(stream);
-
-        stream.Seek((long)offset, SeekOrigin.Begin);
-        var entryLength = reader.ReadUInt32();
-        var entryTag = new string(reader.ReadChars(4));
-
-        if (entryTag != "FILE")
-        {
-            return;
-        }
-
-        var nameLength = reader.ReadUInt32();
-        stream.Seek(32 + nameLength * 2, SeekOrigin.Current); // Skip hash + name
-
-        var headerSize = 4 + 4 + 4 + 32 + nameLength * 2;
-        var dataSize = entryLength - headerSize;
-
-        if (dataSize <= 0)
-        {
-            return;
-        }
-
-        var data = reader.ReadBytes((int)dataSize);
-        if (token.IsCancellationRequested)
-        {
-            return;
-        }
-
+        var data = await ggpkParsingService.LoadGGPKFileDataAsync(ggpkFileInfo, token);
         var text = Encoding.Unicode.GetString(data);
 
         Dispatcher.UIThread.Post(() =>
@@ -508,7 +444,7 @@ public partial class MainWindowViewModel(
     }
 
     private Task ChainGgdhLoadingTask(Task previousTask, CancellationTokenSource? oldCts, CancellationToken token,
-        ulong offset)
+        GGPKFileInfo ggpkFileInfo)
     {
         return previousTask.ContinueWith(async _ =>
         {
@@ -520,7 +456,7 @@ public partial class MainWindowViewModel(
 
             try
             {
-                await LoadGgdhAsync(offset, token);
+                await LoadGgdhAsync(ggpkFileInfo, token);
             }
             catch (Exception ex)
             {
@@ -529,49 +465,16 @@ public partial class MainWindowViewModel(
         }, TaskScheduler.Default).Unwrap();
     }
 
-    private async Task LoadGgdhAsync(ulong offset, CancellationToken token)
+    private async Task LoadGgdhAsync(GGPKFileInfo ggpkFileInfo, CancellationToken token)
     {
-        if (string.IsNullOrEmpty(_currentFilePath))
-        {
-            return;
-        }
-
-        await using var stream = File.OpenRead(_currentFilePath);
-        using var reader = new BinaryReader(stream);
-
-        stream.Seek((long)offset, SeekOrigin.Begin);
-        var entryLength = reader.ReadUInt32();
-        var entryTag = new string(reader.ReadChars(4));
-
-        if (entryTag != "FILE")
-        {
-            return;
-        }
-
-        var nameLength = reader.ReadUInt32();
-        stream.Seek(32 + nameLength * 2, SeekOrigin.Current); // Skip hash + name
-
-        var headerSize = 4 + 4 + 4 + 32 + nameLength * 2;
-        var dataSize = entryLength - headerSize;
-
-        if (dataSize <= 0)
-        {
-            return;
-        }
-
-        var data = reader.ReadBytes((int)dataSize);
-        if (token.IsCancellationRequested)
-        {
-            return;
-        }
-
+        var data = await ggpkParsingService.LoadGGPKFileDataAsync(ggpkFileInfo, token);
         var sb = new StringBuilder();
         sb.AppendLine("GGDH File Content");
-        sb.AppendLine($"Total Data Size: {dataSize} bytes");
+        sb.AppendLine($"Total Data Size: {ggpkFileInfo.DataSize} bytes");
         sb.AppendLine("--------------------------------------------------");
         sb.AppendLine("Raw Data (First 64 bytes):");
 
-        var displayLength = Math.Min((int)dataSize, 64);
+        var displayLength = Math.Min((int)ggpkFileInfo.DataSize, 64);
 
         for (var i = 0; i < displayLength; i++)
         {
@@ -591,8 +494,6 @@ public partial class MainWindowViewModel(
         });
     }
 
-    private BundleIndexInfo? _currentBundleIndexInfo;
-
     [RelayCommand]
     private async Task OpenGgpkFile()
     {
@@ -602,13 +503,15 @@ public partial class MainWindowViewModel(
             return;
         }
 
-        _currentFilePath = filePath;
+        ggpkParsingService.CloseStream();
+        ggpkParsingService.OpenStream(filePath);
+
         Debug.WriteLine($"Selected file in VM: {filePath}");
 
         ButtonText = "Loading";
         try
         {
-            var rootNode = await ggpkParsingService.BuildGgpkTreeAsync(filePath);
+            var rootNode = await ggpkParsingService.BuildGgpkTreeAsync();
 
             GgpkNodes.Clear();
             GgpkNodes.Add(rootNode);

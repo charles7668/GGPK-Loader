@@ -5,20 +5,54 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using GGPK_Loader.Models;
 using GGPK_Loader.Utils;
+using JetBrains.Annotations;
 
 namespace GGPK_Loader.Services;
 
 public class GgpkParsingService : IGgpkParsingService
 {
-    public async Task<GGPKTreeNode> BuildGgpkTreeAsync(string filePath)
+    [UsedImplicitly]
+    private string? _ggpkFilePath;
+
+    private Stream? _ggpkStream;
+    private readonly SemaphoreSlim _streamSemaphore = new(1, 1);
+
+    public void OpenStream(string filePath)
     {
-        return await Task.Run(async () =>
+        _ggpkFilePath = filePath;
+        _ggpkStream = File.OpenRead(filePath);
+    }
+
+    public void CloseStream()
+    {
+        _ggpkStream?.Dispose();
+
+        _ggpkStream = null;
+        _ggpkFilePath = null;
+    }
+
+    private void ThrowIfStreamNotOpen()
+    {
+        if (_ggpkStream is { CanRead: true })
         {
-            await using var stream = File.OpenRead(filePath);
-            using var reader = new BinaryReader(stream);
+            return;
+        }
+
+        throw new InvalidOperationException("GGPK stream is not open");
+    }
+
+    public async Task<GGPKTreeNode> BuildGgpkTreeAsync()
+    {
+        ThrowIfStreamNotOpen();
+        return await Task.Run(() =>
+        {
+            var stream = _ggpkStream!;
+            stream.Seek(0, SeekOrigin.Begin);
+            using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true);
 
             var ggpkHeader = ReadGGPKHeader(reader);
             var entryQueue = new Queue<GGPKTreeNode>();
@@ -34,13 +68,13 @@ public class GgpkParsingService : IGgpkParsingService
                 var currentOffset = offsetQueue.Dequeue();
                 stream.Seek((long)currentOffset, SeekOrigin.Begin);
 
-                var entryLength = reader.ReadUInt32();
+                _ = reader.ReadUInt32(); // entry length
                 var entryTag = new string(reader.ReadChars(4));
 
                 switch (entryTag)
                 {
                     case "FILE":
-                        HandleFileNode(reader, currentNode, currentOffset, entryLength);
+                        HandleFileNode(reader, currentNode, currentOffset);
                         break;
                     case "PDIR":
                         HandlePdirNode(reader, currentNode, entryQueue, offsetQueue);
@@ -62,50 +96,98 @@ public class GgpkParsingService : IGgpkParsingService
         return await Task.Run(() =>
         {
             var bundleRootNode =
-                ggpkRootNode.Children.FirstOrDefault(child => (string)child.Value == "Bundles2");
+                ggpkRootNode.Children.FirstOrDefault(child =>
+                {
+                    if (child.Value is string childStr)
+                        return childStr == "Bundles2";
+                    return false;
+                });
 
             return bundleRootNode == null ? null : ProcessBundle(bundleRootNode, ggpkFilePath);
         });
     }
 
-    public async Task<byte[]> LoadBundleFileDataAsync(string ggpkFilePath, ulong bundleOffset,
-        BundleIndexInfo.FileRecord fileRecord)
+    public async Task<byte[]> LoadBundleFileDataAsync(GGPKFileInfo ggpkBundleFileInfo,
+        BundleIndexInfo.FileRecord bundleFileRecord, CancellationToken ct)
     {
-        if (string.IsNullOrEmpty(ggpkFilePath))
+        ThrowIfStreamNotOpen();
+
+        var stream = _ggpkStream!;
+        var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent((int)ggpkBundleFileInfo.DataSize);
+
+        try
         {
-            return [];
+            if (stream is FileStream fs)
+            {
+                await RandomAccess.ReadAsync(fs.SafeFileHandle, buffer, ggpkBundleFileInfo.DataOffset, ct);
+            }
+            else
+            {
+                await _streamSemaphore.WaitAsync(ct);
+                try
+                {
+                    stream.Seek(ggpkBundleFileInfo.DataOffset, SeekOrigin.Begin);
+                    await stream.ReadExactlyAsync(buffer, 0, (int)ggpkBundleFileInfo.DataSize, ct);
+                }
+                finally
+                {
+                    _streamSemaphore.Release();
+                }
+            }
+
+            var dataSpan = new ReadOnlySpan<byte>(buffer, 0, (int)ggpkBundleFileInfo.DataSize);
+
+            var processingSpan = dataSpan;
+            var bundleInfo = ReadBundleInfo(ref processingSpan);
+            var startBlock = Math.DivRem(bundleFileRecord.FileOffset, bundleInfo.Head.UncompressedBlockGranularity,
+                out var remainder);
+            var endBlock =
+                (bundleFileRecord.FileOffset + bundleFileRecord.FileSize - 1) /
+                bundleInfo.Head.UncompressedBlockGranularity + 1;
+
+            var resultBuffer = GC.AllocateUninitializedArray<byte>(endBlock == bundleInfo.Head.BlockCount
+                ? (int)(bundleInfo.UncompressedSize - bundleInfo.Head.UncompressedBlockGranularity * startBlock)
+                : (int)(bundleInfo.Head.UncompressedBlockGranularity * (endBlock - startBlock)));
+
+            DecompressBlocks(bundleInfo, ref processingSpan, resultBuffer, startBlock, endBlock);
+
+            return new ReadOnlySpan<byte>(resultBuffer, (int)remainder, (int)bundleFileRecord.FileSize).ToArray();
         }
-
-        await using var stream = File.OpenRead(ggpkFilePath);
-        using var reader = new BinaryReader(stream);
-        var fileInfo = ReadGGPKFileInfo(stream, reader, bundleOffset);
-        stream.Seek(fileInfo.DataOffset, SeekOrigin.Begin);
-        var data = reader.ReadBytes((int)fileInfo.DataSize);
-        var dataSpan = new ReadOnlySpan<byte>(data);
-
-        var bundleInfo = ReadBundleInfo(ref dataSpan);
-        var startBlock = Math.DivRem(fileRecord.FileOffset, bundleInfo.Head.UncompressedBlockGranularity,
-            out var remainder);
-        var endBlock =
-            (fileRecord.FileOffset + fileRecord.FileSize - 1) / bundleInfo.Head.UncompressedBlockGranularity + 1;
-
-        var resultBuffer = GC.AllocateUninitializedArray<byte>(endBlock == bundleInfo.Head.BlockCount
-            ? (int)(bundleInfo.UncompressedSize - bundleInfo.Head.UncompressedBlockGranularity * startBlock)
-            : (int)(bundleInfo.Head.UncompressedBlockGranularity * (endBlock - startBlock)));
-
-        DecompressBlocks(bundleInfo, ref dataSpan, resultBuffer, startBlock, endBlock);
-
-        return new ReadOnlySpan<byte>(resultBuffer, (int)remainder, (int)fileRecord.FileSize).ToArray();
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
-    private static byte[] LoadFileFromBundleData(ReadOnlySpan<byte> data, BundleIndexInfo.FileRecord fileRecord)
+    public Task<byte[]> LoadGGPKFileDataAsync(GGPKFileInfo ggpkFileInfo, CancellationToken ct)
     {
-        var offset = fileRecord.FileOffset;
-        var size = fileRecord.FileSize;
-        var resultSpan = data.Slice((int)offset, (int)size);
-        var result = new byte[size];
-        resultSpan.CopyTo(result);
-        return result;
+        ThrowIfStreamNotOpen();
+
+        var stream = _ggpkStream!;
+
+        return Task.Run(async () =>
+        {
+            var buffer = new byte[ggpkFileInfo.DataSize];
+            if (stream is FileStream fs)
+            {
+                await RandomAccess.ReadAsync(fs.SafeFileHandle, buffer, ggpkFileInfo.DataOffset, ct);
+            }
+            else
+            {
+                await _streamSemaphore.WaitAsync(ct);
+                try
+                {
+                    stream.Seek(ggpkFileInfo.DataOffset, SeekOrigin.Begin);
+                    await stream.ReadExactlyAsync(buffer, ct);
+                }
+                finally
+                {
+                    _streamSemaphore.Release();
+                }
+            }
+
+            return buffer;
+        }, ct);
     }
 
 
@@ -142,21 +224,14 @@ public class GgpkParsingService : IGgpkParsingService
         return root;
     }
 
-    private static void HandleFileNode(BinaryReader reader, GGPKTreeNode currentNode, ulong currentOffset,
-        uint entryLength)
+    private static void HandleFileNode(BinaryReader reader, GGPKTreeNode currentNode, ulong currentOffset)
     {
-        var fileNameLength = reader.ReadUInt32();
-        reader.ReadBytes(32); // fileHash
-        var fileNameBytes = reader.ReadBytes((int)fileNameLength * 2);
-        var fileName = Encoding.Unicode.GetString(fileNameBytes).TrimEnd('\0');
+        var fileInfo = ReadGGPKFileInfo(reader.BaseStream, reader, currentOffset);
 
-        var headerSize = 4 + 4 + 4 + 32 + fileNameLength * 2;
-        var dataSize = entryLength - headerSize;
-
-        var fileNode = new GGPKTreeNode(fileName, currentOffset);
+        var fileNode = new GGPKTreeNode(fileInfo, currentOffset);
         currentNode.Children.Add(fileNode);
 
-        Debug.WriteLine($"FILE Name: {fileNode.Value}, Size: {dataSize}");
+        Debug.WriteLine($"FILE Name: {fileInfo.FileName}, Size: {fileInfo.DataSize}");
     }
 
     private static void HandlePdirNode(BinaryReader reader, GGPKTreeNode currentNode,
@@ -238,22 +313,21 @@ public class GgpkParsingService : IGgpkParsingService
         var entryTag = reader.ReadBytes(4);
         var fileNameLength = reader.ReadUInt32();
         var sha256Hash = reader.ReadBytes(32);
-        var fileName = Encoding.Unicode.GetString(reader.ReadBytes((int)(fileNameLength * 2)));
+        var fileName = Encoding.Unicode.GetString(reader.ReadBytes((int)(fileNameLength * 2))).TrimEnd('\0');
 
         var headerSize = 4 + 4 + 4 + 32 + fileNameLength * 2;
         var dataOffset = stream.Position;
         var dataSize = entryLength - headerSize;
         stream.Seek(dataSize, SeekOrigin.Current); // Skip data
-        return new GGPKFileInfo
-        {
-            Length = entryLength,
-            Tag = entryTag,
-            FileNameLength = fileNameLength,
-            SHA256Hash = sha256Hash,
-            FileName = fileName,
-            DataOffset = dataOffset,
-            DataSize = dataSize
-        };
+        return new GGPKFileInfo(
+            entryLength,
+            entryTag,
+            fileNameLength,
+            sha256Hash,
+            fileName,
+            dataOffset,
+            dataSize
+        );
     }
 
     private static BundleInfo ReadBundleInfo(ref ReadOnlySpan<byte> reader)
@@ -439,9 +513,9 @@ public class GgpkParsingService : IGgpkParsingService
         GGPKTreeNode? indexBinNode = null; // Initialize here
         foreach (var child in bundleRootNode.Children)
         {
-            if (child.Value is not string name ||
-                (!name.EndsWith("_.index.bin", StringComparison.OrdinalIgnoreCase) &&
-                 !name.EndsWith("index.bin", StringComparison.OrdinalIgnoreCase)))
+            if (child.Value is not GGPKFileInfo fileInfo ||
+                (!fileInfo.FileName.EndsWith("_.index.bin", StringComparison.OrdinalIgnoreCase) &&
+                 !fileInfo.FileName.EndsWith("index.bin", StringComparison.OrdinalIgnoreCase)))
             {
                 continue;
             }
