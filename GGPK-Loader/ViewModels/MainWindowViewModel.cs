@@ -109,32 +109,28 @@ public partial class MainWindowViewModel(
 
     partial void OnSelectedNodeChanged(GGPKTreeNode? value)
     {
-        var (oldCts, token) = ResetCancellationSource();
-        SelectedImage = null;
-
-        if (ShouldProcessNode(value, out var nodeValue))
+        if (!ShouldProcessNode(value, out var nodeValue))
         {
-            var fileInfo = nodeValue!;
-            NodeInfoText = fileInfo.FileName;
-            if (IsImageFile(fileInfo.FileName))
-            {
-                _loadingFileTask = ChainImageLoadingTask(_loadingFileTask, oldCts, token, fileInfo);
-                return;
-            }
-
-            if (IsTextFile(fileInfo.FileName))
-            {
-                _loadingFileTask = ChainTextLoadingTask(_loadingFileTask, oldCts, token, fileInfo);
-                return;
-            }
-
-            if (IsGgdhFile(fileInfo.FileName))
-            {
-                _loadingFileTask = ChainGgdhLoadingTask(_loadingFileTask, oldCts, token, fileInfo);
-                return;
-            }
+            return;
         }
 
+        var (oldCts, token) = ResetCancellationSource();
+        SelectedImage = null;
+        var fileInfo = nodeValue!;
+        NodeInfoText = fileInfo.FileName;
+        if (IsImageFile(fileInfo.FileName))
+        {
+            _loadingFileTask = ChainImageLoadingTask(_loadingFileTask, oldCts, token, fileInfo);
+            return;
+        }
+
+        if (IsTextFile(fileInfo.FileName))
+        {
+            _loadingFileTask = ChainTextLoadingTask(_loadingFileTask, oldCts, token, fileInfo);
+            return;
+        }
+
+        _loadingFileTask = ChainFileInformationLoadingTask(_loadingFileTask, oldCts, token, fileInfo);
         // Cleanup if not starting a new task
         _loadingFileTask = _loadingFileTask.ContinueWith(_ => oldCts?.Dispose(), TaskScheduler.Default);
     }
@@ -351,6 +347,7 @@ public partial class MainWindowViewModel(
 
             try
             {
+                SelectedImage = null;
                 if (IsTextFile(fileRecord.FileName))
                 {
                     var partialRecord = fileRecord;
@@ -376,6 +373,10 @@ public partial class MainWindowViewModel(
                     var image = await ResolveDDSDataAsync(data);
                     SelectedImage = image;
                 }
+                else
+                {
+                    await LoadBundleFileInformationAsync(bundleFileInfo, fileRecord, token);
+                }
             }
             catch (Exception ex)
             {
@@ -390,6 +391,7 @@ public partial class MainWindowViewModel(
         return fileName.EndsWith(".txt", StringComparison.OrdinalIgnoreCase) ||
                fileName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase) ||
                fileName.EndsWith(".dat", StringComparison.OrdinalIgnoreCase) ||
+               fileName.EndsWith(".mat", StringComparison.OrdinalIgnoreCase) ||
                fileName.EndsWith(".ini", StringComparison.OrdinalIgnoreCase);
     }
 
@@ -438,12 +440,8 @@ public partial class MainWindowViewModel(
         });
     }
 
-    private static bool IsGgdhFile(string fileName)
-    {
-        return fileName.EndsWith("ggdh", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private Task ChainGgdhLoadingTask(Task previousTask, CancellationTokenSource? oldCts, CancellationToken token,
+    private Task ChainFileInformationLoadingTask(Task previousTask, CancellationTokenSource? oldCts,
+        CancellationToken token,
         GGPKFileInfo ggpkFileInfo)
     {
         return previousTask.ContinueWith(async _ =>
@@ -456,24 +454,49 @@ public partial class MainWindowViewModel(
 
             try
             {
-                await LoadGgdhAsync(ggpkFileInfo, token);
+                await LoadFileInformationAsync(ggpkFileInfo, token);
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Failed to load ggdh: {ex.Message}");
+                Debug.WriteLine($"Failed to load file: {ex.Message}");
             }
         }, TaskScheduler.Default).Unwrap();
     }
 
-    private async Task LoadGgdhAsync(GGPKFileInfo ggpkFileInfo, CancellationToken token)
+    private async Task LoadBundleFileInformationAsync(GGPKFileInfo ggpkFileInfo, BundleIndexInfo.FileRecord fileRecord,
+        CancellationToken token)
     {
-        var data = await ggpkParsingService.LoadGGPKFileDataAsync(ggpkFileInfo, token);
         var sb = new StringBuilder();
-        sb.AppendLine("GGDH File Content");
+        sb.AppendLine($"Bundle File Name : {fileRecord.FileName}");
+        sb.AppendLine($"Total Data Size: {fileRecord.FileSize} bytes");
+        sb.AppendLine("--------------------------------------------------");
+        sb.AppendLine("Raw Data (First 64 bytes):");
+
+        var data = await ggpkParsingService.LoadBundleFileDataAsync(ggpkFileInfo, fileRecord with { FileSize = 64 },
+            token);
+        var displayLength = Math.Min((int)fileRecord.FileSize, 64);
+
+        for (var i = 0; i < displayLength; i++)
+        {
+            sb.Append($"{data[i]:X2} ");
+            if ((i + 1) % 16 == 0)
+            {
+                sb.AppendLine();
+            }
+        }
+
+        Dispatcher.UIThread.Post(() => { NodeInfoText = sb.ToString(); });
+    }
+
+    private async Task LoadFileInformationAsync(GGPKFileInfo ggpkFileInfo, CancellationToken token)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"File Name : {ggpkFileInfo.FileName}");
         sb.AppendLine($"Total Data Size: {ggpkFileInfo.DataSize} bytes");
         sb.AppendLine("--------------------------------------------------");
         sb.AppendLine("Raw Data (First 64 bytes):");
 
+        var data = await ggpkParsingService.LoadGGPKFileDataAsync(ggpkFileInfo, 64, token);
         var displayLength = Math.Min((int)ggpkFileInfo.DataSize, 64);
 
         for (var i = 0; i < displayLength; i++)
@@ -485,13 +508,7 @@ public partial class MainWindowViewModel(
             }
         }
 
-        Dispatcher.UIThread.Post(() =>
-        {
-            if (!token.IsCancellationRequested)
-            {
-                NodeInfoText = sb.ToString();
-            }
-        });
+        Dispatcher.UIThread.Post(() => { NodeInfoText = sb.ToString(); });
     }
 
     [RelayCommand]

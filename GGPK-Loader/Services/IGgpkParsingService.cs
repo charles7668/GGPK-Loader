@@ -16,4 +16,5 @@ public interface IGgpkParsingService
         CancellationToken ct);
 
     Task<byte[]> LoadGGPKFileDataAsync(GGPKFileInfo ggpkFileInfo, CancellationToken ct);
+    Task<byte[]> LoadGGPKFileDataAsync(GGPKFileInfo ggpkFileInfo, ulong size, CancellationToken ct);
 }

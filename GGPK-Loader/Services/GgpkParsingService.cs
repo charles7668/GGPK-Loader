@@ -159,7 +159,7 @@ public class GgpkParsingService : IGgpkParsingService
         }
     }
 
-    public Task<byte[]> LoadGGPKFileDataAsync(GGPKFileInfo ggpkFileInfo, CancellationToken ct)
+    public Task<byte[]> LoadGGPKFileDataAsync(GGPKFileInfo ggpkFileInfo, ulong size, CancellationToken ct)
     {
         ThrowIfStreamNotOpen();
 
@@ -167,7 +167,7 @@ public class GgpkParsingService : IGgpkParsingService
 
         return Task.Run(async () =>
         {
-            var buffer = new byte[ggpkFileInfo.DataSize];
+            var buffer = new byte[size];
             if (stream is FileStream fs)
             {
                 await RandomAccess.ReadAsync(fs.SafeFileHandle, buffer, ggpkFileInfo.DataOffset, ct);
@@ -188,6 +188,11 @@ public class GgpkParsingService : IGgpkParsingService
 
             return buffer;
         }, ct);
+    }
+
+    public Task<byte[]> LoadGGPKFileDataAsync(GGPKFileInfo ggpkFileInfo, CancellationToken ct)
+    {
+        return LoadGGPKFileDataAsync(ggpkFileInfo, ggpkFileInfo.DataSize, ct);
     }
 
 
