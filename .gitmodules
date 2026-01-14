@@ -1,0 +1,3 @@
+[submodule "DirectXTexWrap_DLL"]
+	path = DirectXTexWrap_DLL
+	url = https://github.com/charles7668/DirectXTexWrap_DLL.git
