@@ -372,6 +372,12 @@ public partial class MainWindowViewModel(
                         fileRecord, token);
                     var image = await ResolveDDSDataAsync(data);
                     SelectedImage = image;
+                }else if (IsDDSHeaderFile(fileRecord.FileName))
+                {
+                    var data = (await ggpkParsingService.LoadBundleFileDataAsync(bundleFileInfo,
+                        fileRecord, token)).Skip(28).ToArray();
+                    var image = await ResolveDDSDataAsync(data);
+                    SelectedImage = image;
                 }
                 else
                 {
@@ -398,6 +404,11 @@ public partial class MainWindowViewModel(
     private static bool IsDDSFile(string fileName)
     {
         return fileName.EndsWith(".dds", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsDDSHeaderFile(string fileName)
+    {
+        return fileName.EndsWith(".dds.header", StringComparison.OrdinalIgnoreCase);
     }
 
     private Task ChainTextLoadingTask(Task previousTask, CancellationTokenSource? oldCts, CancellationToken token,
