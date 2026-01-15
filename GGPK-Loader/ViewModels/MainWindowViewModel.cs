@@ -33,6 +33,10 @@ public partial class MainWindowViewModel(
     }
 
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(DownloadTreeStructureCommand))]
+    private bool _isLoading;
+
+    [ObservableProperty]
     private string _buttonText = "Open";
 
     [ObservableProperty]
@@ -45,13 +49,13 @@ public partial class MainWindowViewModel(
     private string _nodeInfoText = "";
 
     [ObservableProperty]
+    private GGPKTreeNode? _selectedBundleInfoNode;
+
+    [ObservableProperty]
     private Bitmap? _selectedImage;
 
     [ObservableProperty]
     private GGPKTreeNode? _selectedNode;
-
-    [ObservableProperty]
-    private GGPKTreeNode? _selectedBundleInfoNode;
 
     public ObservableCollection<GGPKTreeNode> BundleTreeItems { get; } = new();
 
@@ -90,7 +94,9 @@ public partial class MainWindowViewModel(
         var parts = bundleName.Split('/', StringSplitOptions.RemoveEmptyEntries);
         var currentNode = GgpkNodes[0].Children.FirstOrDefault(child => child.Value.ToString() == "Bundles2");
         if (currentNode == null)
+        {
             return null;
+        }
 
         foreach (var part in parts)
         {
@@ -372,7 +378,8 @@ public partial class MainWindowViewModel(
                         fileRecord, token);
                     var image = await ResolveDDSDataAsync(data);
                     SelectedImage = image;
-                }else if (IsDDSHeaderFile(fileRecord.FileName))
+                }
+                else if (IsDDSHeaderFile(fileRecord.FileName))
                 {
                     var data = (await ggpkParsingService.LoadBundleFileDataAsync(bundleFileInfo,
                         fileRecord, token)).Skip(28).ToArray();
@@ -536,7 +543,10 @@ public partial class MainWindowViewModel(
 
         Debug.WriteLine($"Selected file in VM: {filePath}");
 
+        Debug.WriteLine($"Selected file in VM: {filePath}");
+
         ButtonText = "Loading";
+        IsLoading = true;
         try
         {
             var rootNode = await ggpkParsingService.BuildGgpkTreeAsync();
@@ -560,6 +570,65 @@ public partial class MainWindowViewModel(
         finally
         {
             ButtonText = "Open";
+            IsLoading = false;
+        }
+    }
+
+    private bool CanDownloadTreeStructure()
+    {
+        return !IsLoading;
+    }
+
+    [RelayCommand(CanExecute = nameof(CanDownloadTreeStructure))]
+    private async Task DownloadTreeStructure()
+    {
+        if (GgpkNodes.Count == 0)
+        {
+            await messageService.ShowErrorMessageAsync("No GGPK file loaded.");
+            return;
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("GGPK Tree Structure:");
+        foreach (var node in GgpkNodes)
+        {
+            AppendNodeStructure(sb, node, 0);
+        }
+
+        if (BundleTreeItems.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Bundle Tree Structure:");
+            foreach (var node in BundleTreeItems)
+            {
+                AppendNodeStructure(sb, node, 0);
+            }
+        }
+
+        var savePath = await fileService.SaveFileAsync("Save Tree Structure", "GGPK_Tree_Structure", "txt");
+        if (string.IsNullOrEmpty(savePath))
+        {
+            return;
+        }
+
+        try
+        {
+            await File.WriteAllTextAsync(savePath, sb.ToString());
+        }
+        catch (Exception ex)
+        {
+            await messageService.ShowErrorMessageAsync($"Failed to save file: {ex.Message}");
+        }
+    }
+
+    private void AppendNodeStructure(StringBuilder sb, GGPKTreeNode node, int depth)
+    {
+        sb.Append(' ', depth * 2);
+        sb.AppendLine(node.Value.ToString());
+
+        foreach (var child in node.Children)
+        {
+            AppendNodeStructure(sb, child, depth + 1);
         }
     }
 }

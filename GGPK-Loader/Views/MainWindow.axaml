@@ -16,7 +16,10 @@
     </Design.DataContext>
 
     <Grid RowDefinitions="Auto, *">
-        <Button Grid.Row="0" Content="{Binding ButtonText}" Margin="5" Command="{Binding OpenGgpkFileCommand}" />
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="5" Margin="5">
+            <Button Content="{Binding ButtonText}" Command="{Binding OpenGgpkFileCommand}" />
+            <Button Content="Download Tree Info" Command="{Binding DownloadTreeStructureCommand}" />
+        </StackPanel>
         <Grid Grid.Row="1" ColumnDefinitions="*, 4, *, 4, *">
             <TreeView Grid.Column="0" ItemsSource="{Binding GgpkNodes}" SelectedItem="{Binding SelectedNode}">
                 <TreeView.ItemTemplate>
