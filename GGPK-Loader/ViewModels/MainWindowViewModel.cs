@@ -543,8 +543,6 @@ public partial class MainWindowViewModel(
 
         Debug.WriteLine($"Selected file in VM: {filePath}");
 
-        Debug.WriteLine($"Selected file in VM: {filePath}");
-
         ButtonText = "Loading";
         IsLoading = true;
         try
@@ -629,6 +627,70 @@ public partial class MainWindowViewModel(
         foreach (var child in node.Children)
         {
             AppendNodeStructure(sb, child, depth + 1);
+        }
+    }
+
+    [RelayCommand]
+    private async Task Export(GGPKTreeNode? node)
+    {
+        if (node?.Value == null)
+        {
+            return;
+        }
+
+        string fileName;
+        Func<Task<byte[]>>? loadDataTaskFactory = null;
+
+        if (node.Value is GGPKFileInfo ggpkFileInfo)
+        {
+            fileName = ggpkFileInfo.FileName;
+            loadDataTaskFactory = () => ggpkParsingService.LoadGGPKFileDataAsync(ggpkFileInfo, CancellationToken.None);
+        }
+        else if (node.Value is BundleIndexInfo.FileRecord bundleFileRecord)
+        {
+            fileName = bundleFileRecord.FileName;
+            if (BundleTreeItems.FirstOrDefault()?.Value is BundleIndexInfo bundleIndexInfo)
+            {
+                var bundleName = bundleIndexInfo.Bundles[bundleFileRecord.BundleIndex].Name;
+
+                var foundNode = FindGgpkNode(bundleName + ".bundle.bin");
+                if (foundNode?.Value is GGPKFileInfo bundleGGPKFileInfo)
+                {
+                    loadDataTaskFactory = () =>
+                        ggpkParsingService.LoadBundleFileDataAsync(bundleGGPKFileInfo, bundleFileRecord,
+                            CancellationToken.None);
+                }
+            }
+        }
+        else
+        {
+            return;
+        }
+
+        if (loadDataTaskFactory == null)
+        {
+            return;
+        }
+
+        var savePath = await fileService.SaveFileAsync("Save File", fileName, "");
+        if (string.IsNullOrEmpty(savePath))
+        {
+            return;
+        }
+
+        IsLoading = true;
+        try
+        {
+            var data = await loadDataTaskFactory();
+            await File.WriteAllBytesAsync(savePath, data);
+        }
+        catch (Exception ex)
+        {
+            await messageService.ShowErrorMessageAsync($"Failed to export file: {ex.Message}");
+        }
+        finally
+        {
+            IsLoading = false;
         }
     }
 }

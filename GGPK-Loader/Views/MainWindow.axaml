@@ -24,7 +24,15 @@
             <TreeView Grid.Column="0" ItemsSource="{Binding GgpkNodes}" SelectedItem="{Binding SelectedNode}">
                 <TreeView.ItemTemplate>
                     <TreeDataTemplate ItemsSource="{Binding Children}">
-                        <TextBlock Text="{Binding Value}" />
+                        <TextBlock Text="{Binding Value}">
+                            <TextBlock.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="Export"
+                                              Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ExportCommand}"
+                                              CommandParameter="{Binding}" />
+                                </ContextMenu>
+                            </TextBlock.ContextMenu>
+                        </TextBlock>
                     </TreeDataTemplate>
                 </TreeView.ItemTemplate>
             </TreeView>
@@ -34,7 +42,15 @@
                       SelectedItem="{Binding SelectedBundleInfoNode}">
                 <TreeView.ItemTemplate>
                     <TreeDataTemplate ItemsSource="{Binding Children}">
-                        <TextBlock Text="{Binding Value}" />
+                        <TextBlock Text="{Binding Value}">
+                            <TextBlock.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="Export"
+                                              Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ExportCommand}"
+                                              CommandParameter="{Binding}" />
+                                </ContextMenu>
+                            </TextBlock.ContextMenu>
+                        </TextBlock>
                     </TreeDataTemplate>
                 </TreeView.ItemTemplate>
             </TreeView>
