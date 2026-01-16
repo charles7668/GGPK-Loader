@@ -16,11 +16,11 @@ public class FileService(Window target) : IFileService
 
         var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "Select GGPK File",
+            Title = "Select File",
             AllowMultiple = false,
             FileTypeFilter = new[]
             {
-                new FilePickerFileType("GGPK Files") { Patterns = new[] { "*.ggpk" } },
+                new FilePickerFileType("GGPK Files") { Patterns = new[] { "*.*" } },
                 FilePickerFileTypes.All
             }
         });

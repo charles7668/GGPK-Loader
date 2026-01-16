@@ -735,4 +735,32 @@ public partial class MainWindowViewModel(
             }
         }
     }
+
+    [RelayCommand]
+    private async Task Replace(GGPKTreeNode? node)
+    {
+        if (node is { Value: GGPKFileInfo, Parent.Value: GGPKDirInfo })
+        {
+            try
+            {
+                var filePath = await fileService.OpenFileAsync();
+                if (string.IsNullOrEmpty(filePath))
+                {
+                    return;
+                }
+
+                var data = await File.ReadAllBytesAsync(filePath);
+                await ggpkParsingService.ReplaceFileDataAsync(data, node, CancellationToken.None);
+                await messageService.ShowErrorMessageAsync("File replaced successfully.");
+            }
+            catch (OperationCanceledException)
+            {
+                // ignore
+            }
+            catch (Exception ex)
+            {
+                await messageService.ShowErrorMessageAsync($"Failed to replace file: {ex.Message}");
+            }
+        }
+    }
 }

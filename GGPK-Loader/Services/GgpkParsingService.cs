@@ -188,6 +188,85 @@ public class GgpkParsingService : IGgpkParsingService
         }, ct);
     }
 
+    public async Task ReplaceFileDataAsync(ReadOnlyMemory<byte> replaceSource, GGPKTreeNode targetNode,
+        CancellationToken ct)
+    {
+        if (targetNode.Value is BundleIndexInfo.FileRecord)
+        {
+            // todo process bundle file
+            throw new NotImplementedException("Not support bundle file yet");
+        }
+
+        // if not GGPKFileInfo
+        if (targetNode.Value is not GGPKFileInfo targetFileInfo)
+        {
+            return;
+        }
+
+        if (targetFileInfo.DataSize != (ulong)replaceSource.Length)
+        {
+            // todo using FREE space to process different file size
+            throw new NotImplementedException("Not support replace data with different size yet");
+        }
+
+        ThrowIfStreamNotOpen();
+        var filePath = _ggpkFilePath!;
+        await _streamSemaphore.WaitAsync(ct);
+        CloseStream();
+        try
+        {
+            await using var fs = File.OpenWrite(filePath);
+            await RandomAccess.WriteAsync(fs.SafeFileHandle, replaceSource, targetFileInfo.DataOffset, ct);
+
+            var newHash = System.Security.Cryptography.SHA256.HashData(replaceSource.Span);
+
+            var hashOffset = targetFileInfo.DataOffset - targetFileInfo.FileNameLength * 2 - 32;
+            await RandomAccess.WriteAsync(fs.SafeFileHandle, newHash, hashOffset, ct);
+
+            var newFileInfo = targetFileInfo with { SHA256Hash = newHash };
+            targetNode.Value = newFileInfo;
+
+            var parentsQueue = new Queue<GGPKTreeNode>();
+            if (targetNode.Parent?.Value is GGPKDirInfo)
+            {
+                parentsQueue.Enqueue(targetNode.Parent);
+            }
+
+            while (parentsQueue.Count > 0)
+            {
+                var parentNode = parentsQueue.Dequeue();
+                var childHashes = parentNode.Children
+                    .Select(child => child.Value)
+                    .Select(val => val switch
+                    {
+                        GGPKFileInfo f => f.SHA256Hash,
+                        GGPKDirInfo d => d.SHA256Hash,
+                        _ => null
+                    })
+                    .OfType<byte[]>()
+                    .ToList();
+
+                var parentNewHash =
+                    System.Security.Cryptography.SHA256.HashData(childHashes.SelectMany(x => x).ToArray());
+                // Length(4) + Tag(4) + NameLength(4) + TotalEntries(4) = 16
+                var parentHashOffset = parentNode.Offset + 16;
+                await RandomAccess.WriteAsync(fs.SafeFileHandle, parentNewHash, (long)parentHashOffset, ct);
+
+                parentNode.Value = (GGPKDirInfo)parentNode.Value with { SHA256Hash = parentNewHash };
+
+                if (parentNode.Parent?.Value is GGPKDirInfo)
+                {
+                    parentsQueue.Enqueue(parentNode.Parent);
+                }
+            }
+        }
+        finally
+        {
+            OpenStream(filePath);
+            _streamSemaphore.Release();
+        }
+    }
+
     public Task<byte[]> LoadGGPKFileDataAsync(GGPKFileInfo ggpkFileInfo, CancellationToken ct)
     {
         return LoadGGPKFileDataAsync(ggpkFileInfo, ggpkFileInfo.DataSize, ct);
@@ -259,7 +338,7 @@ public class GgpkParsingService : IGgpkParsingService
         };
         currentNode.Children.Add(fileNode);
 
-        Debug.WriteLine($"FILE Name: {fileInfo.FileName}, Size: {fileInfo.DataSize}");
+        // Debug.WriteLine($"FILE Name: {fileInfo.FileName}, Size: {fileInfo.DataSize}");
     }
 
     private void HandlePdirNode(GGPKTreeNode currentNode,
@@ -267,12 +346,12 @@ public class GgpkParsingService : IGgpkParsingService
         Queue<GGPKTreeNode> entryQueue, Queue<ulong> offsetQueue)
     {
         var dirInfo = ReadGGPKDirInfo(pdirOffset);
-        var nextNode = new GGPKTreeNode(dirInfo, currentNode.Offset)
+        var nextNode = new GGPKTreeNode(dirInfo, pdirOffset)
         {
             Parent = currentNode
         };
         currentNode.Children.Add(nextNode);
-        Debug.WriteLine($"PDIR Name: {nextNode.Value}");
+        // Debug.WriteLine($"PDIR Name: {nextNode.Value}");
 
         for (var i = 0; i < dirInfo.TotalEntries; i++)
         {
@@ -694,7 +773,48 @@ public class GgpkParsingService : IGgpkParsingService
         }
     }
 
-    private static ulong MurmurHash64A(ReadOnlySpan<byte> utf8Name, ulong seed = 0x1337B33F)
+    public static uint MurmurHash2(ReadOnlySpan<byte> data, uint seed = 0xC58F1A7Bu)
+    {
+        const uint m = 0x5BD1E995u;
+        const int r = 24;
+
+        unchecked
+        {
+            seed ^= (uint)data.Length;
+
+            while (data.Length >= 4)
+            {
+                var k = BinaryPrimitives.ReadUInt32LittleEndian(data);
+                k *= m;
+                k ^= k >> r;
+                k *= m;
+
+                seed = (seed * m) ^ k;
+
+                data = data[4..];
+            }
+
+            switch (data.Length)
+            {
+                case 3:
+                    seed ^= (uint)data[2] << 16;
+                    goto case 2;
+                case 2:
+                    seed ^= (uint)data[1] << 8;
+                    goto case 1;
+                case 1:
+                    seed ^= data[0];
+                    seed *= m;
+                    break;
+            }
+
+            seed ^= seed >> 13;
+            seed *= m;
+            return seed ^ (seed >> 15);
+        }
+    }
+
+    public static ulong MurmurHash64A(ReadOnlySpan<byte> utf8Name, ulong seed = 0x1337B33F)
     {
         if (utf8Name.IsEmpty)
         {
