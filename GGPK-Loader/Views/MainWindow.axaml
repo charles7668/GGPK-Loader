@@ -30,6 +30,9 @@
                                     <MenuItem Header="Export"
                                               Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ExportCommand}"
                                               CommandParameter="{Binding}" />
+                                    <MenuItem Header="Copy Path"
+                                              Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).CopyPathCommand}"
+                                              CommandParameter="{Binding}" />
                                 </ContextMenu>
                             </TextBlock.ContextMenu>
                         </TextBlock>
@@ -47,6 +50,9 @@
                                 <ContextMenu>
                                     <MenuItem Header="Export"
                                               Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ExportCommand}"
+                                              CommandParameter="{Binding}" />
+                                    <MenuItem Header="Copy Path"
+                                              Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).CopyPathCommand}"
                                               CommandParameter="{Binding}" />
                                 </ContextMenu>
                             </TextBlock.ContextMenu>

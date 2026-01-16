@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
@@ -8,6 +9,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
+using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
@@ -691,6 +693,46 @@ public partial class MainWindowViewModel(
         finally
         {
             IsLoading = false;
+        }
+    }
+
+    [RelayCommand]
+    private async Task CopyPath(GGPKTreeNode? node)
+    {
+        if (node is null)
+        {
+            return;
+        }
+
+        var pathParts = new Stack<string>();
+        var current = node;
+        while (current != null)
+        {
+            var name = current.Value switch
+            {
+                GGPKFileInfo info => info.FileName,
+                BundleIndexInfo.FileRecord record => record.FileName,
+                string s => s,
+                _ => ""
+            };
+
+            if (!string.IsNullOrEmpty(name))
+            {
+                pathParts.Push(name);
+            }
+
+            current = current.Parent;
+        }
+
+        var path = string.Join("/", pathParts);
+
+        if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime
+            desktop)
+        {
+            if (desktop.MainWindow?.Clipboard is { } clipboard)
+            {
+                await clipboard.SetTextAsync(path);
+            }
         }
     }
 }
