@@ -70,7 +70,7 @@ public class GgpkParsingService : IGgpkParsingService
                         HandleFileNode(currentNode, currentOffset);
                         break;
                     case "PDIR":
-                        HandlePdirNode(currentNode, entryQueue, offsetQueue);
+                        HandlePdirNode(currentNode, currentOffset, entryQueue, offsetQueue);
                         break;
                     case "FREE":
                         break;
@@ -93,9 +93,9 @@ public class GgpkParsingService : IGgpkParsingService
             var bundleRootNode =
                 ggpkRootNode.Children.FirstOrDefault(child =>
                 {
-                    if (child.Value is string childStr)
+                    if (child.Value is GGPKDirInfo childInfo)
                     {
-                        return childStr == "Bundles2";
+                        return childInfo.Name == "Bundles2";
                     }
 
                     return false;
@@ -263,37 +263,20 @@ public class GgpkParsingService : IGgpkParsingService
     }
 
     private void HandlePdirNode(GGPKTreeNode currentNode,
+        ulong pdirOffset,
         Queue<GGPKTreeNode> entryQueue, Queue<ulong> offsetQueue)
     {
-        ThrowIfStreamNotOpen();
-        var stream = _ggpkStream!;
-
-        Span<byte> headerBuffer = stackalloc byte[8];
-        stream.ReadExactly(headerBuffer);
-        var nameLength = BinaryPrimitives.ReadUInt32LittleEndian(headerBuffer);
-        var totalEntries = BinaryPrimitives.ReadUInt32LittleEndian(headerBuffer[4..]);
-
-        stream.Seek(32, SeekOrigin.Current); // sha256
-
-        var nameBytes = new byte[nameLength * 2];
-        stream.ReadExactly(nameBytes);
-        var name = Encoding.Unicode.GetString(nameBytes).TrimEnd('\0');
-
-        var nextNode = new GGPKTreeNode(name, currentNode.Offset)
+        var dirInfo = ReadGGPKDirInfo(pdirOffset);
+        var nextNode = new GGPKTreeNode(dirInfo, currentNode.Offset)
         {
             Parent = currentNode
         };
         currentNode.Children.Add(nextNode);
         Debug.WriteLine($"PDIR Name: {nextNode.Value}");
 
-        Span<byte> entryBuffer = stackalloc byte[12];
-        for (var i = 0; i < totalEntries; i++)
+        for (var i = 0; i < dirInfo.TotalEntries; i++)
         {
-            stream.ReadExactly(entryBuffer);
-            // entry name hash (first 4 bytes) is skipped
-            var entryOffset = BinaryPrimitives.ReadUInt64LittleEndian(entryBuffer.Slice(4));
-
-            offsetQueue.Enqueue(entryOffset);
+            offsetQueue.Enqueue(dirInfo.DirectoryEntries[i].Offset);
             entryQueue.Enqueue(nextNode);
         }
     }
@@ -398,6 +381,52 @@ public class GgpkParsingService : IGgpkParsingService
             fileName,
             dataOffset,
             dataSize
+        );
+    }
+
+    private GGPKDirInfo ReadGGPKDirInfo(ulong? offset)
+    {
+        ThrowIfStreamNotOpen();
+        var stream = _ggpkStream!;
+        if (offset != null)
+        {
+            stream.Seek((long)offset, SeekOrigin.Begin);
+        }
+
+        Span<byte> buffer = stackalloc byte[8];
+        stream.ReadExactly(buffer);
+        var entryLength = BinaryPrimitives.ReadUInt32LittleEndian(buffer);
+        var entryTag = buffer.Slice(4, 4).ToArray(); // Keep tag as byte array
+
+        stream.ReadExactly(buffer);
+        var nameLength = BinaryPrimitives.ReadUInt32LittleEndian(buffer);
+        var totalEntries = BinaryPrimitives.ReadUInt32LittleEndian(buffer[4..]);
+
+        Span<byte> sha256Hash = stackalloc byte[32];
+        stream.ReadExactly(sha256Hash);
+
+        Span<byte> nameBytes = stackalloc byte[(int)nameLength * 2];
+        stream.ReadExactly(nameBytes);
+        var dirName = Encoding.Unicode.GetString(nameBytes).TrimEnd('\0');
+
+        Span<byte> entryBuffer = stackalloc byte[12];
+        List<GGPKDirectoryEntry> entries = [];
+        for (var i = 0; i < totalEntries; i++)
+        {
+            stream.ReadExactly(entryBuffer);
+            var entryNameHash = BinaryPrimitives.ReadInt32LittleEndian(entryBuffer);
+            var entryOffset = BinaryPrimitives.ReadUInt64LittleEndian(entryBuffer.Slice(4));
+            entries.Add(new GGPKDirectoryEntry(entryNameHash, entryOffset));
+        }
+
+        return new GGPKDirInfo(
+            entryLength,
+            entryTag,
+            nameLength,
+            totalEntries,
+            sha256Hash.ToArray(),
+            dirName,
+            entries.ToArray()
         );
     }
 
