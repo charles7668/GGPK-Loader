@@ -7,6 +7,7 @@ public class GGPKTreeNode
 {
     public object Value { get; set; }
     public ulong Offset { get; set; }
+    public GGPKTreeNode? Parent { get; set; }
     public List<GGPKTreeNode> Children { get; set; } = new();
 
     public GGPKTreeNode(object value, ulong offset)

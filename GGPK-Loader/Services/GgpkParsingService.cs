@@ -80,7 +80,9 @@ public class GgpkParsingService : IGgpkParsingService
                 }
             }
 
-            return rootNodeInternal.Children.Count > 0 ? rootNodeInternal.Children[0] : rootNodeInternal;
+            var newRootNode = rootNodeInternal.Children.Count > 0 ? rootNodeInternal.Children[0] : rootNodeInternal;
+            newRootNode.Parent = null;
+            return newRootNode;
         });
     }
 
@@ -251,7 +253,10 @@ public class GgpkParsingService : IGgpkParsingService
         ThrowIfStreamNotOpen();
         var fileInfo = ReadGGPKFileInfo(currentOffset);
 
-        var fileNode = new GGPKTreeNode(fileInfo, currentOffset);
+        var fileNode = new GGPKTreeNode(fileInfo, currentOffset)
+        {
+            Parent = currentNode
+        };
         currentNode.Children.Add(fileNode);
 
         Debug.WriteLine($"FILE Name: {fileInfo.FileName}, Size: {fileInfo.DataSize}");
@@ -274,7 +279,10 @@ public class GgpkParsingService : IGgpkParsingService
         stream.ReadExactly(nameBytes);
         var name = Encoding.Unicode.GetString(nameBytes).TrimEnd('\0');
 
-        var nextNode = new GGPKTreeNode(name, currentNode.Offset);
+        var nextNode = new GGPKTreeNode(name, currentNode.Offset)
+        {
+            Parent = currentNode
+        };
         currentNode.Children.Add(nextNode);
         Debug.WriteLine($"PDIR Name: {nextNode.Value}");
 
@@ -746,7 +754,10 @@ public class GgpkParsingService : IGgpkParsingService
 
             if (foundChild == null)
             {
-                foundChild = new GGPKTreeNode(part, 0); // Offset 0 for virtual nodes for now
+                foundChild = new GGPKTreeNode(part, 0)
+                {
+                    Parent = currentNode
+                }; // Offset 0 for virtual nodes for now
                 currentNode.Children.Add(foundChild);
             }
 
