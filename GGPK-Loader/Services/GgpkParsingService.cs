@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -203,12 +204,339 @@ public class GgpkParsingService : IGgpkParsingService
             return;
         }
 
-        if (targetFileInfo.DataSize != (ulong)replaceSource.Length)
+        if (targetFileInfo.DataSize == (ulong)replaceSource.Length)
         {
-            // todo using FREE space to process different file size
-            throw new NotImplementedException("Not support replace data with different size yet");
+            await ReplaceDataWithSameSize(replaceSource, targetNode, targetFileInfo, ct);
+            return;
         }
 
+        if ((targetFileInfo.DataSize - GGPKFreeInfo.HeaderSize) >= (ulong)replaceSource.Length)
+        {
+            await ReplaceDataWithSmallSize(replaceSource, targetNode, targetFileInfo, ct);
+            return;
+        }
+
+        await ReplaceDataWithLargeSize(replaceSource, targetNode, targetFileInfo, ct);
+    }
+
+    private async Task ReplaceDataWithLargeSize(ReadOnlyMemory<byte> replaceSource, GGPKTreeNode targetNode,
+        GGPKFileInfo targetFileInfo, CancellationToken ct)
+    {
+        var requiredSize = (uint)(targetFileInfo.HeaderSize + (ulong)replaceSource.Length);
+        // First, attempt to find a free block matching the exact required size. If unavailable, search for a block that also accommodates the free info header.
+        var targetFreeInfo = FindFreeSpace(requiredSize, FreeSpaceSearchMode.Equal) ??
+                             FindFreeSpace(requiredSize + GGPKFreeInfo.HeaderSize);
+        var lastFreeInfo = FindLastFreeSpace();
+
+        ThrowIfStreamNotOpen();
+        var filePath = _ggpkFilePath!;
+        await _streamSemaphore.WaitAsync(ct);
+        CloseStream();
+
+        try
+        {
+            await using var fs = File.OpenWrite(filePath);
+
+            long writeOffset;
+            long pointerToNextOffset;
+
+            if (targetFreeInfo != null)
+            {
+                writeOffset = (long)(targetFreeInfo.DataOffset - GGPKFreeInfo.HeaderSize);
+
+                if (targetFreeInfo.Length > requiredSize + GGPKFreeInfo.HeaderSize)
+                {
+                    // Split the free block
+                    var tailOffset = writeOffset + requiredSize;
+                    var tailLength = targetFreeInfo.Length - requiredSize;
+
+                    // Update Previous to point to tail, depends on ggpk format, support previous free info is not null 
+                    var prevNextOffsetPos =
+                        (long)(targetFreeInfo.PreviousFreeInfo!.DataOffset - GGPKFreeInfo.HeaderSize + 8);
+
+                    var nextBuffer = new byte[8];
+                    BinaryPrimitives.WriteUInt64LittleEndian(nextBuffer, (ulong)tailOffset);
+                    await RandomAccess.WriteAsync(fs.SafeFileHandle, nextBuffer, prevNextOffsetPos, ct);
+
+                    // Create new Free Header at tail, pointing to original Next
+                    var splitFreeHeaderBuffer = new byte[16];
+                    BinaryPrimitives.WriteUInt32LittleEndian(splitFreeHeaderBuffer.AsSpan(0, 4), tailLength);
+                    "FREE"u8.ToArray().CopyTo(splitFreeHeaderBuffer, 4);
+                    BinaryPrimitives.WriteUInt64LittleEndian(splitFreeHeaderBuffer.AsSpan(8, 8),
+                        targetFreeInfo.NextOffset);
+                    await RandomAccess.WriteAsync(fs.SafeFileHandle, splitFreeHeaderBuffer, tailOffset, ct);
+                }
+                else
+                {
+                    var prevNextOffsetPos =
+                        (long)(targetFreeInfo.PreviousFreeInfo!.DataOffset - GGPKFreeInfo.HeaderSize + 8);
+
+                    var nextBuffer = new byte[8];
+                    BinaryPrimitives.WriteUInt64LittleEndian(nextBuffer, targetFreeInfo.NextOffset);
+                    await RandomAccess.WriteAsync(fs.SafeFileHandle, nextBuffer, prevNextOffsetPos, ct);
+                }
+            }
+            else
+            {
+                writeOffset = fs.Length;
+            }
+
+            pointerToNextOffset = (long)(lastFreeInfo!.DataOffset - GGPKFreeInfo.HeaderSize + 8);
+
+            // Write New File Header + Data
+            var headerBuffer = new byte[targetFileInfo.HeaderSize];
+            BinaryPrimitives.WriteUInt32LittleEndian(headerBuffer.AsSpan(0, 4), requiredSize);
+            "FILE"u8.ToArray().CopyTo(headerBuffer, 4);
+            BinaryPrimitives.WriteUInt32LittleEndian(headerBuffer.AsSpan(8, 4), targetFileInfo.FileNameLength);
+
+            var newHash = SHA256.HashData(replaceSource.Span);
+            newHash.CopyTo(headerBuffer, 12);
+
+            var fileNameBytes = new byte[targetFileInfo.FileNameLength * 2];
+            Encoding.Unicode.GetBytes(targetFileInfo.FileName).CopyTo(fileNameBytes, 0);
+            fileNameBytes.CopyTo(headerBuffer, 44);
+
+            await RandomAccess.WriteAsync(fs.SafeFileHandle, headerBuffer, writeOffset, ct);
+
+            var newDataOffset = writeOffset + (long)targetFileInfo.HeaderSize;
+            await RandomAccess.WriteAsync(fs.SafeFileHandle, replaceSource, newDataOffset, ct);
+
+            // Convert Old File to FREE & Link
+            var oldOffset = (long)targetNode.Offset;
+            var oldLength = targetFileInfo.Length;
+
+            var freeHeaderBuffer = new byte[16];
+            BinaryPrimitives.WriteUInt32LittleEndian(freeHeaderBuffer.AsSpan(0, 4), oldLength);
+            "FREE"u8.ToArray().CopyTo(freeHeaderBuffer, 4);
+            BinaryPrimitives.WriteUInt64LittleEndian(freeHeaderBuffer.AsSpan(8, 8), 0);
+
+            await RandomAccess.WriteAsync(fs.SafeFileHandle, freeHeaderBuffer, oldOffset, ct);
+
+            // Link old free node to list
+            var linkBuffer = new byte[8];
+            BinaryPrimitives.WriteUInt64LittleEndian(linkBuffer, (ulong)oldOffset);
+            await RandomAccess.WriteAsync(fs.SafeFileHandle, linkBuffer, pointerToNextOffset, ct);
+
+            // Update Memory
+            var newFileInfo = targetFileInfo with
+            {
+                SHA256Hash = newHash,
+                Length = requiredSize,
+                DataOffset = newDataOffset,
+                DataSize = (ulong)replaceSource.Length
+            };
+            targetNode.Offset = (ulong)writeOffset;
+            targetNode.Value = newFileInfo;
+
+            // Propagate Hash
+            var parentsQueue = new Queue<GGPKTreeNode>();
+            if (targetNode.Parent?.Value is GGPKDirInfo parentDirInfo)
+            {
+                var childIndex = targetNode.Parent.Children.IndexOf(targetNode);
+                if (childIndex >= 0)
+                {
+                    var entryOffsetPos = (long)targetNode.Parent.Offset + 48 + parentDirInfo.NameLength * 2 +
+                                         childIndex * 12 + 4;
+                    var newOffsetBuffer = new byte[8];
+                    BinaryPrimitives.WriteUInt64LittleEndian(newOffsetBuffer, (ulong)writeOffset);
+                    await RandomAccess.WriteAsync(fs.SafeFileHandle, newOffsetBuffer, entryOffsetPos, ct);
+
+                    var newEntries = parentDirInfo.DirectoryEntries.ToArray();
+                    newEntries[childIndex] = newEntries[childIndex] with { Offset = (ulong)writeOffset };
+                    targetNode.Parent.Value = parentDirInfo with { DirectoryEntries = newEntries };
+                }
+
+                parentsQueue.Enqueue(targetNode.Parent);
+            }
+
+            while (parentsQueue.Count > 0)
+            {
+                var parentNode = parentsQueue.Dequeue();
+                var childHashes = parentNode.Children
+                    .Select(child => child.Value)
+                    .Select(val => val switch
+                    {
+                        GGPKFileInfo f => f.SHA256Hash,
+                        GGPKDirInfo d => d.SHA256Hash,
+                        _ => null
+                    })
+                    .OfType<byte[]>()
+                    .ToList();
+
+                var parentNewHash =
+                    SHA256.HashData(childHashes.SelectMany(x => x).ToArray());
+
+                var parentHashOffset = parentNode.Offset + 16;
+                await RandomAccess.WriteAsync(fs.SafeFileHandle, parentNewHash, (long)parentHashOffset, ct);
+
+                parentNode.Value = (GGPKDirInfo)parentNode.Value with { SHA256Hash = parentNewHash };
+
+                if (parentNode.Parent?.Value is GGPKDirInfo)
+                {
+                    parentsQueue.Enqueue(parentNode.Parent);
+                }
+            }
+        }
+        finally
+        {
+            OpenStream(filePath);
+            _streamSemaphore.Release();
+        }
+    }
+
+    private async Task ReplaceDataWithSmallSize(ReadOnlyMemory<byte> replaceSource, GGPKTreeNode targetNode,
+        GGPKFileInfo targetFileInfo, CancellationToken ct)
+    {
+        var lastFreeInfo = FindLastFreeSpace();
+
+        var filePath = _ggpkFilePath!;
+        await _streamSemaphore.WaitAsync(ct);
+        CloseStream();
+        try
+        {
+            await using var fs = File.OpenWrite(filePath);
+
+            // Replace content
+            await RandomAccess.WriteAsync(fs.SafeFileHandle, replaceSource, targetFileInfo.DataOffset, ct);
+
+            // Change hash
+            var newHash = System.Security.Cryptography.SHA256.HashData(replaceSource.Span);
+            var hashOffset = targetFileInfo.HashOffset;
+            await RandomAccess.WriteAsync(fs.SafeFileHandle, newHash, (int)hashOffset, ct);
+
+            // Change length data
+            var newEntryLength = (uint)(targetFileInfo.HeaderSize + (ulong)replaceSource.Length);
+            var lengthBuffer = new byte[4];
+            BinaryPrimitives.WriteUInt32LittleEndian(lengthBuffer, newEntryLength);
+            await RandomAccess.WriteAsync(fs.SafeFileHandle, lengthBuffer, (long)targetNode.Offset, ct);
+
+            // Create FREE Entry in the remaining space
+            var freeEntryOffset = targetFileInfo.DataOffset + replaceSource.Length;
+            var freeEntryLength = (uint)(targetFileInfo.DataSize - (ulong)replaceSource.Length);
+
+            // Construct Free Header
+            // Length (4), Tag (4), NextOffset (8)
+            var freeHeaderBuffer = new byte[16];
+            BinaryPrimitives.WriteUInt32LittleEndian(freeHeaderBuffer.AsSpan(0, 4), freeEntryLength);
+            "FREE"u8.ToArray().CopyTo(freeHeaderBuffer, 4);
+            BinaryPrimitives.WriteUInt64LittleEndian(freeHeaderBuffer.AsSpan(8, 8), 0);
+
+            await RandomAccess.WriteAsync(fs.SafeFileHandle, freeHeaderBuffer, freeEntryOffset, ct);
+
+            // Link new FREE entry to the list
+            var lastFreeNextOffsetPos = (long)(lastFreeInfo.DataOffset - GGPKFreeInfo.HeaderSize + 8);
+            var nextOffsetBuffer = new byte[8];
+            BinaryPrimitives.WriteUInt64LittleEndian(nextOffsetBuffer, (ulong)freeEntryOffset);
+            await RandomAccess.WriteAsync(fs.SafeFileHandle, nextOffsetBuffer, lastFreeNextOffsetPos, ct);
+
+            var newFileInfo = targetFileInfo with
+            {
+                SHA256Hash = newHash,
+                Length = newEntryLength,
+                DataSize = (ulong)replaceSource.Length
+            };
+            targetNode.Value = newFileInfo;
+
+            // Update Parent Hashes
+            var parentsQueue = new Queue<GGPKTreeNode>();
+            if (targetNode.Parent?.Value is GGPKDirInfo)
+            {
+                parentsQueue.Enqueue(targetNode.Parent);
+            }
+
+            while (parentsQueue.Count > 0)
+            {
+                var parentNode = parentsQueue.Dequeue();
+                var childHashes = parentNode.Children
+                    .Select(child => child.Value)
+                    .Select(val => val switch
+                    {
+                        GGPKFileInfo f => f.SHA256Hash,
+                        GGPKDirInfo d => d.SHA256Hash,
+                        _ => null
+                    })
+                    .OfType<byte[]>()
+                    .ToList();
+
+                var parentNewHash =
+                    System.Security.Cryptography.SHA256.HashData(childHashes.SelectMany(x => x).ToArray());
+                // Length(4) + Tag(4) + NameLength(4) + TotalEntries(4) = 16
+                var parentHashOffset = parentNode.Offset + 16;
+                await RandomAccess.WriteAsync(fs.SafeFileHandle, parentNewHash, (long)parentHashOffset, ct);
+
+                parentNode.Value = (GGPKDirInfo)parentNode.Value with { SHA256Hash = parentNewHash };
+
+                if (parentNode.Parent?.Value is GGPKDirInfo)
+                {
+                    parentsQueue.Enqueue(parentNode.Parent);
+                }
+            }
+        }
+        finally
+        {
+            OpenStream(filePath);
+            _streamSemaphore.Release();
+        }
+    }
+
+    private enum FreeSpaceSearchMode
+    {
+        GreaterOrEqual,
+        Equal
+    }
+
+    private GGPKFreeInfo? FindFreeSpace(ulong requiredSize,
+        FreeSpaceSearchMode mode = FreeSpaceSearchMode.GreaterOrEqual)
+    {
+        ThrowIfStreamNotOpen();
+        var ggpkHeader = ReadGGPKHeader();
+        GGPKFreeInfo? previousFreeInfo = null;
+        var nextOffset = ggpkHeader.Entries[1].Offset;
+
+        while (nextOffset > 0)
+        {
+            var freeInfo = ReadGGPKFreeInfo(nextOffset, previousFreeInfo);
+            var currentSize = freeInfo.DataLength + GGPKFreeInfo.HeaderSize;
+
+            var isMatch = mode switch
+            {
+                FreeSpaceSearchMode.Equal => currentSize == requiredSize,
+                FreeSpaceSearchMode.GreaterOrEqual => currentSize >= requiredSize,
+                _ => false
+            };
+
+            if (isMatch && freeInfo.PreviousFreeInfo != null)
+            {
+                return freeInfo;
+            }
+
+            previousFreeInfo = freeInfo;
+            nextOffset = freeInfo.NextOffset;
+        }
+
+        return null;
+    }
+
+    private GGPKFreeInfo? FindLastFreeSpace()
+    {
+        ThrowIfStreamNotOpen();
+        var ggpkHeader = ReadGGPKHeader();
+        GGPKFreeInfo? previousFreeInfo = null;
+        var nextOffset = ggpkHeader.Entries[1].Offset;
+
+        while (nextOffset > 0)
+        {
+            var freeInfo = ReadGGPKFreeInfo(nextOffset, previousFreeInfo);
+            previousFreeInfo = freeInfo;
+            nextOffset = freeInfo.NextOffset;
+        }
+
+        return previousFreeInfo;
+    }
+
+    private async Task ReplaceDataWithSameSize(ReadOnlyMemory<byte> replaceSource, GGPKTreeNode targetNode,
+        GGPKFileInfo targetFileInfo, CancellationToken ct)
+    {
         ThrowIfStreamNotOpen();
         var filePath = _ggpkFilePath!;
         await _streamSemaphore.WaitAsync(ct);
@@ -286,6 +614,7 @@ public class GgpkParsingService : IGgpkParsingService
     {
         ThrowIfStreamNotOpen();
         var stream = _ggpkStream!;
+        stream.Seek(0, SeekOrigin.Begin);
 
         Span<byte> buffer = stackalloc byte[28];
         stream.ReadExactly(buffer);
@@ -460,6 +789,32 @@ public class GgpkParsingService : IGgpkParsingService
             fileName,
             dataOffset,
             dataSize
+        );
+    }
+
+    private GGPKFreeInfo ReadGGPKFreeInfo(ulong? offset, GGPKFreeInfo? previousFreeInfo)
+    {
+        ThrowIfStreamNotOpen();
+        var stream = _ggpkStream!;
+        if (offset != null)
+        {
+            stream.Seek((long)offset, SeekOrigin.Begin);
+        }
+
+        Span<byte> buffer = stackalloc byte[16];
+        stream.ReadExactly(buffer);
+        var entryLength = BinaryPrimitives.ReadUInt32LittleEndian(buffer);
+        var entryTag = buffer.Slice(4, 4).ToArray(); // Keep tag as byte array
+        var nextOffset = BinaryPrimitives.ReadInt64LittleEndian(buffer[8..]);
+        var dataOffset = stream.Position;
+        var dataSize = entryLength - 16;
+        return new GGPKFreeInfo(
+            entryLength,
+            entryTag,
+            (ulong)nextOffset,
+            (ulong)dataOffset,
+            dataSize,
+            previousFreeInfo
         );
     }
 

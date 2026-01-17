@@ -5,5 +5,10 @@ internal record GGPKFreeInfo(
     byte[] Tag, // = "FREE"
     ulong NextOffset,
     ulong DataOffset,
-    ulong DataLength
-);
+    ulong DataLength,
+    GGPKFreeInfo? PreviousFreeInfo
+)
+{
+    // Lenght(4) + Tag(4) + NextOffset(8)
+    public const ulong HeaderSize = 16;
+};

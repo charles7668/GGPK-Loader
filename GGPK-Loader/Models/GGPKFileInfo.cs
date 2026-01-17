@@ -13,6 +13,10 @@ public record GGPKFileInfo(
     ulong DataSize
 )
 {
+    public ulong HeaderSize => 4 + 4 + 4 + 32 + FileNameLength * 2;
+
+    public ulong HashOffset => (ulong)(DataOffset - FileNameLength * 2 - 32);
+
     public override string ToString()
     {
         return FileName;
