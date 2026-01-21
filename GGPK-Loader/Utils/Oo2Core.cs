@@ -80,4 +80,23 @@ public static class Oo2Core
             0,
             3);
     }
+
+    
+    [DllImport("oo2core_8_win64.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern long OodleLZ_Compress(
+        int codec,
+        byte[] srcBuf,
+        long srcLen,
+        byte[] dstBuf,
+        int level,
+        IntPtr opts,
+        IntPtr scratch,
+        IntPtr lrm,
+        IntPtr component
+    );
+
+    public static long Compress(int codec, byte[] src, long srcLen, byte[] dst, int level)
+    {
+        return OodleLZ_Compress(codec, src, srcLen, dst, level, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+    }
 }

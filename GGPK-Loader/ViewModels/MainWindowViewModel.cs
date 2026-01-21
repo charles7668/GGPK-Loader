@@ -26,16 +26,18 @@ namespace GGPK_Loader.ViewModels;
 public partial class MainWindowViewModel(
     IFileService fileService,
     IMessageService messageService,
-    IGgpkParsingService ggpkParsingService) : ViewModelBase
+    IGgpkParsingService ggpkParsingService,
+    IGgpkBundleService ggpkBundleService) : ViewModelBase
 {
     // For Design Time Preview
-    public MainWindowViewModel() : this(null!, null!, null!)
+    public MainWindowViewModel() : this(null!, null!, null!, null!)
     {
         // Design-time constructor
     }
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(DownloadTreeStructureCommand))]
+    [NotifyCanExecuteChangedFor(nameof(OpenGgpkFileCommand))]
     private bool _isLoading;
 
     [ObservableProperty]
@@ -63,6 +65,11 @@ public partial class MainWindowViewModel(
 
     partial void OnSelectedBundleInfoNodeChanged(GGPKTreeNode? value)
     {
+        if (IsLoading)
+        {
+            return;
+        }
+
         if (BundleTreeItems.Count == 0 || BundleTreeItems[0].Value is not BundleIndexInfo bundleIndexInfo)
         {
             return;
@@ -117,6 +124,11 @@ public partial class MainWindowViewModel(
 
     partial void OnSelectedNodeChanged(GGPKTreeNode? value)
     {
+        if (IsLoading)
+        {
+            return;
+        }
+
         if (!ShouldProcessNode(value, out var nodeValue))
         {
             return;
@@ -364,7 +376,7 @@ public partial class MainWindowViewModel(
                         partialRecord = fileRecord with { FileSize = 2 * 1024 * 1024 };
                     }
 
-                    var data = await ggpkParsingService.LoadBundleFileDataAsync(bundleFileInfo,
+                    var data = await ggpkBundleService.LoadBundleFileDataAsync(bundleFileInfo,
                         partialRecord, token);
                     Dispatcher.UIThread.Post(() =>
                     {
@@ -376,14 +388,14 @@ public partial class MainWindowViewModel(
                 }
                 else if (IsDDSFile(fileRecord.FileName))
                 {
-                    var data = await ggpkParsingService.LoadBundleFileDataAsync(bundleFileInfo,
+                    var data = await ggpkBundleService.LoadBundleFileDataAsync(bundleFileInfo,
                         fileRecord, token);
                     var image = await ResolveDDSDataAsync(data);
                     SelectedImage = image;
                 }
                 else if (IsDDSHeaderFile(fileRecord.FileName))
                 {
-                    var data = (await ggpkParsingService.LoadBundleFileDataAsync(bundleFileInfo,
+                    var data = (await ggpkBundleService.LoadBundleFileDataAsync(bundleFileInfo,
                         fileRecord, token)).Skip(28).ToArray();
                     var image = await ResolveDDSDataAsync(data);
                     SelectedImage = image;
@@ -492,7 +504,7 @@ public partial class MainWindowViewModel(
         sb.AppendLine("--------------------------------------------------");
         sb.AppendLine("Raw Data (First 64 bytes):");
 
-        var data = await ggpkParsingService.LoadBundleFileDataAsync(ggpkFileInfo, fileRecord with { FileSize = 64 },
+        var data = await ggpkBundleService.LoadBundleFileDataAsync(ggpkFileInfo, fileRecord with { FileSize = 64 },
             token);
         var displayLength = Math.Min((int)fileRecord.FileSize, 64);
 
@@ -531,7 +543,12 @@ public partial class MainWindowViewModel(
         Dispatcher.UIThread.Post(() => { NodeInfoText = sb.ToString(); });
     }
 
-    [RelayCommand]
+    private bool CanOpenGgpkFile()
+    {
+        return !IsLoading;
+    }
+
+    [RelayCommand(CanExecute = nameof(CanOpenGgpkFile))]
     private async Task OpenGgpkFile()
     {
         var filePath = await fileService.OpenFileAsync();
@@ -554,7 +571,7 @@ public partial class MainWindowViewModel(
             GgpkNodes.Clear();
             GgpkNodes.Add(rootNode);
 
-            var bundleTree = await ggpkParsingService.BuildBundleTreeAsync(rootNode, filePath);
+            var bundleTree = await ggpkBundleService.BuildBundleTreeAsync(rootNode, filePath);
             SelectedBundleInfoNode = null;
 
             BundleTreeItems.Clear();
@@ -659,7 +676,7 @@ public partial class MainWindowViewModel(
                 if (foundNode?.Value is GGPKFileInfo bundleGGPKFileInfo)
                 {
                     loadDataTaskFactory = () =>
-                        ggpkParsingService.LoadBundleFileDataAsync(bundleGGPKFileInfo, bundleFileRecord,
+                        ggpkBundleService.LoadBundleFileDataAsync(bundleGGPKFileInfo, bundleFileRecord,
                             CancellationToken.None);
                 }
             }
@@ -732,6 +749,105 @@ public partial class MainWindowViewModel(
             if (desktop.MainWindow?.Clipboard is { } clipboard)
             {
                 await clipboard.SetTextAsync(path);
+            }
+        }
+    }
+
+    [RelayCommand]
+    private async Task ReplaceBundleFile(GGPKTreeNode? node)
+    {
+        if (node?.Value is BundleIndexInfo.FileRecord fileRecord &&
+            BundleTreeItems.FirstOrDefault()?.Value is BundleIndexInfo bundleIndexInfo)
+        {
+            try
+            {
+                var filePath = await fileService.OpenFileAsync();
+                if (string.IsNullOrEmpty(filePath))
+                {
+                    return;
+                }
+
+                IsLoading = true;
+                var newContent = await File.ReadAllBytesAsync(filePath);
+
+                var bundleName = bundleIndexInfo.Bundles[fileRecord.BundleIndex].Name;
+                var foundNode = FindGgpkNode(bundleName + ".bundle.bin");
+
+                if (foundNode?.Value is GGPKFileInfo bundleGGPKFileInfo)
+                {
+                    var newBundleData = await ggpkBundleService.ReplaceBundleFileContentAsync(bundleGGPKFileInfo,
+                        fileRecord, newContent, CancellationToken.None);
+
+                    await ggpkParsingService.ReplaceFileDataAsync(newBundleData, foundNode, CancellationToken.None);
+
+                    // Update Index Info
+                    var sizeDiff = newContent.Length - (int)fileRecord.FileSize;
+                    var bundleRecord = bundleIndexInfo.Bundles[fileRecord.BundleIndex];
+                    var newUncompressedSize = (uint)((int)bundleRecord.UncompressedSize + sizeDiff);
+
+                    // Update Bundle Record
+                    var newBundles = bundleIndexInfo.Bundles.ToArray();
+                    newBundles[fileRecord.BundleIndex] = new BundleIndexInfo.BundleRecord(
+                        bundleRecord.NameLength, bundleRecord.Name, newUncompressedSize);
+
+                    // Update File Records
+                    var newFiles = bundleIndexInfo.Files.ToArray();
+                    for (var i = 0; i < newFiles.Length; i++)
+                    {
+                        var f = newFiles[i];
+                        if (f.Hash == fileRecord.Hash && f.BundleIndex == fileRecord.BundleIndex)
+                        {
+                            newFiles[i] = f with { FileSize = (uint)newContent.Length };
+                        }
+                        else if (f.BundleIndex == fileRecord.BundleIndex && f.FileOffset > fileRecord.FileOffset)
+                        {
+                            newFiles[i] = f with { FileOffset = (uint)(f.FileOffset + sizeDiff) };
+                        }
+                    }
+
+                    var newIndexInfo = bundleIndexInfo with
+                    {
+                        Bundles = newBundles,
+                        Files = newFiles
+                    };
+
+                    var indexNode = FindGgpkNode("_.index.bin") ?? FindGgpkNode("index.bin");
+                    if (indexNode != null)
+                    {
+                        await ggpkBundleService.UpdateBundleIndexAsync(newIndexInfo, indexNode, CancellationToken.None);
+                    }
+                    else
+                    {
+                        await messageService.ShowErrorMessageAsync("Could not find index.bin to update.");
+                    }
+
+                    // Refresh Bundle Tree
+                    if (GgpkNodes.FirstOrDefault() is { } rootNode)
+                    {
+                        var newBundleTree = await ggpkBundleService.BuildBundleTreeAsync(rootNode, "");
+                        BundleTreeItems.Clear();
+                        if (newBundleTree != null)
+                        {
+                            BundleTreeItems.Add(newBundleTree);
+                        }
+                    }
+
+                    // Try to re-select the node if possible, but the old node reference is stale.
+                    // Accessing fileRecord.FileName might help to find it again later if needed.
+                    await messageService.ShowErrorMessageAsync("File replaced successfully. Bundle tree refreshed.");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // ignore
+            }
+            catch (Exception ex)
+            {
+                await messageService.ShowErrorMessageAsync($"Failed to replace file: {ex.Message}");
+            }
+            finally
+            {
+                IsLoading = false;
             }
         }
     }

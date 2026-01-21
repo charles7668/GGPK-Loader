@@ -28,7 +28,9 @@ public partial class App : Application
             collection.AddSingleton<MainWindow>();
             collection.AddSingleton<IFileService>(sp => new FileService(sp.GetRequiredService<MainWindow>()));
             collection.AddSingleton<IMessageService>(sp => new MessageService(sp.GetRequiredService<MainWindow>()));
+            collection.AddSingleton<IStreamManager, StreamManager>();
             collection.AddSingleton<IGgpkParsingService, GgpkParsingService>();
+            collection.AddSingleton<IGgpkBundleService, GgpkBundleService>();
             collection.AddSingleton<MainWindowViewModel>();
 
             var services = collection.BuildServiceProvider();
