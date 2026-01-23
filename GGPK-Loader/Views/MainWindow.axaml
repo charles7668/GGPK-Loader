@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:GGPK_Loader.ViewModels"
+        xmlns:models="using:GGPK_Loader.Models"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
@@ -19,65 +20,106 @@
         <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="5" Margin="5">
             <Button Content="{Binding ButtonText}" Command="{Binding OpenGgpkFileCommand}" />
             <Button Content="Download Tree Info" Command="{Binding DownloadTreeStructureCommand}" />
+            <TextBox Width="200" Text="{Binding SearchText}" Watermark="Search..." />
+            <CheckBox Content="Regex" IsChecked="{Binding UseRegex}" VerticalAlignment="Center" />
+            <CheckBox Content="Match Case" IsChecked="{Binding MatchCase}" VerticalAlignment="Center" />
+            <Button Content="Search" Command="{Binding SearchCommand}" />
         </StackPanel>
         <Grid Grid.Row="1" ColumnDefinitions="*, 4, *, 4, *">
-            <TreeView Grid.Column="0" ItemsSource="{Binding GgpkNodes}" SelectedItem="{Binding SelectedNode}">
-                <TreeView.Styles>
-                    <Style Selector="TreeViewItem">
-                        <Setter Property="HorizontalAlignment" Value="Stretch" />
-                    </Style>
-                </TreeView.Styles>
-                <TreeView.ItemTemplate>
-                    <TreeDataTemplate ItemsSource="{Binding Children}">
-                        <Grid Background="Transparent">
-                            <TextBlock Text="{Binding Value}" />
-                            <Grid.ContextMenu>
-                                <ContextMenu>
-                                    <MenuItem Header="Export"
-                                              Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ExportCommand}"
-                                              CommandParameter="{Binding}" />
-                                    <MenuItem Header="Copy Path"
-                                              Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).CopyPathCommand}"
-                                              CommandParameter="{Binding}" />
-                                    <MenuItem Header="Replace"
-                                              Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ReplaceCommand}"
-                                              CommandParameter="{Binding}" />
-                                </ContextMenu>
-                            </Grid.ContextMenu>
-                        </Grid>
-                    </TreeDataTemplate>
-                </TreeView.ItemTemplate>
-            </TreeView>
+            <Grid Grid.Column="0" RowDefinitions="*, Auto">
+                <TreeView Grid.Row="0" ItemsSource="{Binding GgpkNodes}" SelectedItem="{Binding SelectedNode}">
+                    <TreeView.Styles>
+                        <Style Selector="TreeViewItem">
+                            <Setter Property="IsExpanded"
+                                    Value="{Binding IsExpanded, Mode=TwoWay, DataType=models:GGPKTreeNode}" />
+                            <Setter Property="IsSelected"
+                                    Value="{Binding IsSelected, Mode=TwoWay, DataType=models:GGPKTreeNode}" />
+                            <Setter Property="HorizontalAlignment" Value="Stretch" />
+                        </Style>
+                    </TreeView.Styles>
+                    <TreeView.ItemTemplate>
+                        <TreeDataTemplate ItemsSource="{Binding Children}">
+                            <Grid Background="Transparent">
+                                <TextBlock Text="{Binding Name}">
+                                    <TextBlock.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="Export"
+                                                      Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ExportCommand}"
+                                                      CommandParameter="{Binding}" />
+                                            <MenuItem Header="Copy Path"
+                                                      Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).CopyPathCommand}"
+                                                      CommandParameter="{Binding}" />
+                                            <MenuItem Header="Replace"
+                                                      Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ReplaceCommand}"
+                                                      CommandParameter="{Binding}" />
+                                        </ContextMenu>
+                                    </TextBlock.ContextMenu>
+                                </TextBlock>
+                            </Grid>
+                        </TreeDataTemplate>
+                    </TreeView.ItemTemplate>
+                </TreeView>
+                <Panel Grid.Row="1" Height="150" IsVisible="{Binding HasGgpkSearchResults}">
+                    <ListBox ItemsSource="{Binding GgpkSearchResults}"
+                             SelectedItem="{Binding SelectedGgpkSearchResult}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Name}" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <Button Content="X" Command="{Binding CloseGgpkSearchResultsCommand}" HorizontalAlignment="Right"
+                            VerticalAlignment="Top" Margin="5" Padding="5,0" />
+                </Panel>
+            </Grid>
             <GridSplitter Grid.Column="1" Background="LightGray" ResizeDirection="Columns" />
 
-            <TreeView Grid.Column="2" ItemsSource="{Binding BundleTreeItems}"
-                      SelectedItem="{Binding SelectedBundleInfoNode}">
-                <TreeView.Styles>
-                    <Style Selector="TreeViewItem">
-                        <Setter Property="HorizontalAlignment" Value="Stretch" />
-                    </Style>
-                </TreeView.Styles>
-                <TreeView.ItemTemplate>
-                    <TreeDataTemplate ItemsSource="{Binding Children}">
-                        <Grid Background="Transparent">
-                            <TextBlock Text="{Binding Value}" />
-                            <Grid.ContextMenu>
-                                <ContextMenu>
-                                    <MenuItem Header="Export"
-                                              Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ExportCommand}"
-                                              CommandParameter="{Binding}" />
-                                    <MenuItem Header="Copy Path"
-                                              Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).CopyPathCommand}"
-                                              CommandParameter="{Binding}" />
-                                    <MenuItem Header="Replace"
-                                              Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ReplaceBundleFileCommand}"
-                                              CommandParameter="{Binding}" />
-                                </ContextMenu>
-                            </Grid.ContextMenu>
-                        </Grid>
-                    </TreeDataTemplate>
-                </TreeView.ItemTemplate>
-            </TreeView>
+            <Grid Grid.Column="2" RowDefinitions="*, Auto">
+                <TreeView Grid.Row="0" ItemsSource="{Binding BundleTreeItems}"
+                          SelectedItem="{Binding SelectedBundleInfoNode}">
+                    <TreeView.Styles>
+                        <Style Selector="TreeViewItem">
+                            <Setter Property="IsExpanded"
+                                    Value="{Binding IsExpanded, Mode=TwoWay, DataType=models:GGPKTreeNode}" />
+                            <Setter Property="IsSelected"
+                                    Value="{Binding IsSelected, Mode=TwoWay, DataType=models:GGPKTreeNode}" />
+                            <Setter Property="HorizontalAlignment" Value="Stretch" />
+                        </Style>
+                    </TreeView.Styles>
+                    <TreeView.ItemTemplate>
+                        <TreeDataTemplate ItemsSource="{Binding Children}">
+                            <Grid Background="Transparent">
+                                <TextBlock Text="{Binding Value}" />
+                                <Grid.ContextMenu>
+                                    <ContextMenu>
+                                        <MenuItem Header="Export"
+                                                  Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ExportCommand}"
+                                                  CommandParameter="{Binding}" />
+                                        <MenuItem Header="Copy Path"
+                                                  Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).CopyPathCommand}"
+                                                  CommandParameter="{Binding}" />
+                                        <MenuItem Header="Replace"
+                                                  Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ReplaceBundleFileCommand}"
+                                                  CommandParameter="{Binding}" />
+                                    </ContextMenu>
+                                </Grid.ContextMenu>
+                            </Grid>
+                        </TreeDataTemplate>
+                    </TreeView.ItemTemplate>
+                </TreeView>
+                <Panel Grid.Row="1" Height="150" IsVisible="{Binding HasBundleSearchResults}">
+                    <ListBox ItemsSource="{Binding BundleSearchResults}"
+                             SelectedItem="{Binding SelectedBundleSearchResult}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Name}" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <Button Content="X" Command="{Binding CloseBundleSearchResultsCommand}" HorizontalAlignment="Right"
+                            VerticalAlignment="Top" Margin="5" Padding="5,0" />
+                </Panel>
+            </Grid>
             <GridSplitter Grid.Column="3" Background="LightGray" ResizeDirection="Columns" />
 
             <Panel Grid.Column="4">

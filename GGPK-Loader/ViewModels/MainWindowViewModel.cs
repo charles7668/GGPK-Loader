@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
@@ -36,15 +37,21 @@ public partial class MainWindowViewModel(
     }
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(DownloadTreeStructureCommand))]
-    [NotifyCanExecuteChangedFor(nameof(OpenGgpkFileCommand))]
-    private bool _isLoading;
-
-    [ObservableProperty]
     private string _buttonText = "Open";
 
     [ObservableProperty]
     private ObservableCollection<GGPKTreeNode> _ggpkNodes = new();
+
+    [ObservableProperty]
+    private bool _hasBundleSearchResults;
+
+    [ObservableProperty]
+    private bool _hasGgpkSearchResults;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(DownloadTreeStructureCommand))]
+    [NotifyCanExecuteChangedFor(nameof(OpenGgpkFileCommand))]
+    private bool _isLoading;
 
     private CancellationTokenSource? _loadingFileCts;
     private Task _loadingFileTask = Task.CompletedTask;
@@ -53,7 +60,16 @@ public partial class MainWindowViewModel(
     private string _nodeInfoText = "";
 
     [ObservableProperty]
+    private string _searchText = "";
+
+    [ObservableProperty]
     private GGPKTreeNode? _selectedBundleInfoNode;
+
+    [ObservableProperty]
+    private GGPKTreeNode? _selectedBundleSearchResult;
+
+    [ObservableProperty]
+    private GGPKTreeNode? _selectedGgpkSearchResult;
 
     [ObservableProperty]
     private Bitmap? _selectedImage;
@@ -61,7 +77,151 @@ public partial class MainWindowViewModel(
     [ObservableProperty]
     private GGPKTreeNode? _selectedNode;
 
+    [ObservableProperty]
+    private bool _useRegex;
+
+    [ObservableProperty]
+    private bool _matchCase;
+
+    public ObservableCollection<GGPKTreeNode> GgpkSearchResults { get; } = new();
+    public ObservableCollection<GGPKTreeNode> BundleSearchResults { get; } = new();
+
     public ObservableCollection<GGPKTreeNode> BundleTreeItems { get; } = new();
+
+    partial void OnSelectedGgpkSearchResultChanged(GGPKTreeNode? value)
+    {
+        if (value == null)
+        {
+            return;
+        }
+
+        HandleSearchResultSelection(value);
+        SelectedNode = value;
+    }
+
+    partial void OnSelectedBundleSearchResultChanged(GGPKTreeNode? value)
+    {
+        if (value == null)
+        {
+            return;
+        }
+
+        HandleSearchResultSelection(value);
+        SelectedBundleInfoNode = value;
+    }
+
+    private static void HandleSearchResultSelection(GGPKTreeNode value)
+    {
+        // Expand parents
+        var parent = value.Parent;
+        while (parent != null)
+        {
+            parent.IsExpanded = true;
+            parent = parent.Parent;
+        }
+
+        value.IsExpanded = true;
+        value.IsSelected = true;
+    }
+
+    [RelayCommand]
+    private async Task Search()
+    {
+        if (string.IsNullOrWhiteSpace(SearchText))
+        {
+            return;
+        }
+
+        IsLoading = true;
+        GgpkSearchResults.Clear();
+        BundleSearchResults.Clear();
+
+        try
+        {
+            string pattern;
+            if (UseRegex)
+            {
+                pattern = SearchText;
+            }
+            else
+            {
+                // Wildcard to Regex: *.txt -> .*\.txt (removed start/end anchors)
+                pattern = Regex.Escape(SearchText)
+                    .Replace("\\*", ".*")
+                    .Replace("\\?", ".");
+            }
+
+            var regexOptions = MatchCase ? RegexOptions.None : RegexOptions.IgnoreCase;
+            var regex = new Regex(pattern, regexOptions);
+
+            await Task.Run(() =>
+            {
+                if (GgpkNodes.Count > 0)
+                {
+                    SearchRecursive(GgpkNodes[0], regex, GgpkSearchResults);
+                }
+
+                if (BundleTreeItems.Count > 0)
+                {
+                    SearchRecursive(BundleTreeItems[0], regex, BundleSearchResults);
+                }
+            });
+
+            if (GgpkSearchResults.Count > 0)
+            {
+                SelectedGgpkSearchResult = GgpkSearchResults[0];
+            }
+
+            if (BundleSearchResults.Count > 0)
+            {
+                SelectedBundleSearchResult = BundleSearchResults[0];
+            }
+
+            if (GgpkSearchResults.Count == 0 && BundleSearchResults.Count == 0)
+            {
+                await messageService.ShowErrorMessageAsync("No results found.");
+            }
+
+            HasGgpkSearchResults = GgpkSearchResults.Count > 0;
+            HasBundleSearchResults = BundleSearchResults.Count > 0;
+        }
+        catch (Exception ex)
+        {
+            await messageService.ShowErrorMessageAsync($"Search failed: {ex.Message}");
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    [RelayCommand]
+    private void CloseGgpkSearchResults()
+    {
+        GgpkSearchResults.Clear();
+        HasGgpkSearchResults = false;
+    }
+
+    [RelayCommand]
+    private void CloseBundleSearchResults()
+    {
+        BundleSearchResults.Clear();
+        HasBundleSearchResults = false;
+    }
+
+    private void SearchRecursive(GGPKTreeNode node, Regex regex, ObservableCollection<GGPKTreeNode> results)
+    {
+        var name = node.Value.ToString() ?? "";
+        if (regex.IsMatch(name))
+        {
+            Dispatcher.UIThread.Post(() => results.Add(node));
+        }
+
+        foreach (var child in node.Children)
+        {
+            SearchRecursive(child, regex, results);
+        }
+    }
 
     partial void OnSelectedBundleInfoNodeChanged(GGPKTreeNode? value)
     {
