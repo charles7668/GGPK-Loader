@@ -22,10 +22,16 @@
         </StackPanel>
         <Grid Grid.Row="1" ColumnDefinitions="*, 4, *, 4, *">
             <TreeView Grid.Column="0" ItemsSource="{Binding GgpkNodes}" SelectedItem="{Binding SelectedNode}">
+                <TreeView.Styles>
+                    <Style Selector="TreeViewItem">
+                        <Setter Property="HorizontalAlignment" Value="Stretch" />
+                    </Style>
+                </TreeView.Styles>
                 <TreeView.ItemTemplate>
                     <TreeDataTemplate ItemsSource="{Binding Children}">
-                        <TextBlock Text="{Binding Value}">
-                            <TextBlock.ContextMenu>
+                        <Grid Background="Transparent">
+                            <TextBlock Text="{Binding Value}" />
+                            <Grid.ContextMenu>
                                 <ContextMenu>
                                     <MenuItem Header="Export"
                                               Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ExportCommand}"
@@ -37,8 +43,8 @@
                                               Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ReplaceCommand}"
                                               CommandParameter="{Binding}" />
                                 </ContextMenu>
-                            </TextBlock.ContextMenu>
-                        </TextBlock>
+                            </Grid.ContextMenu>
+                        </Grid>
                     </TreeDataTemplate>
                 </TreeView.ItemTemplate>
             </TreeView>
@@ -46,10 +52,16 @@
 
             <TreeView Grid.Column="2" ItemsSource="{Binding BundleTreeItems}"
                       SelectedItem="{Binding SelectedBundleInfoNode}">
+                <TreeView.Styles>
+                    <Style Selector="TreeViewItem">
+                        <Setter Property="HorizontalAlignment" Value="Stretch" />
+                    </Style>
+                </TreeView.Styles>
                 <TreeView.ItemTemplate>
                     <TreeDataTemplate ItemsSource="{Binding Children}">
-                        <TextBlock Text="{Binding Value}">
-                            <TextBlock.ContextMenu>
+                        <Grid Background="Transparent">
+                            <TextBlock Text="{Binding Value}" />
+                            <Grid.ContextMenu>
                                 <ContextMenu>
                                     <MenuItem Header="Export"
                                               Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ExportCommand}"
@@ -61,8 +73,8 @@
                                               Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ReplaceBundleFileCommand}"
                                               CommandParameter="{Binding}" />
                                 </ContextMenu>
-                            </TextBlock.ContextMenu>
-                        </TextBlock>
+                            </Grid.ContextMenu>
+                        </Grid>
                     </TreeDataTemplate>
                 </TreeView.ItemTemplate>
             </TreeView>
