@@ -125,7 +125,9 @@
             <Panel Grid.Column="4">
                 <TextBox Text="{Binding NodeInfoText}" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True"
                          ScrollViewer.VerticalScrollBarVisibility="Auto"
-                         IsVisible="{Binding SelectedImage, Converter={x:Static ObjectConverters.IsNull}}" />
+                         IsVisible="{Binding IsInfoTextVisible}" />
+                <TreeDataGrid Source="{Binding DatInfoSource}"
+                              IsVisible="{Binding IsDatViewVisible}" />
                 <Image Source="{Binding SelectedImage}" HorizontalAlignment="Center" VerticalAlignment="Center"
                        IsVisible="{Binding SelectedImage, Converter={x:Static ObjectConverters.IsNotNull}}" />
             </Panel>

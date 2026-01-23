@@ -10,7 +10,9 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Controls.Models.TreeDataGrid;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
@@ -40,6 +42,14 @@ public partial class MainWindowViewModel(
     private string _buttonText = "Open";
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsDatViewVisible))]
+    [NotifyPropertyChangedFor(nameof(IsInfoTextVisible))]
+    private FlatTreeDataGridSource<DatRow>? _datInfoSource;
+
+    [ObservableProperty]
+    private byte[]? _datViewBytes;
+
+    [ObservableProperty]
     private ObservableCollection<GGPKTreeNode> _ggpkNodes = new();
 
     [ObservableProperty]
@@ -57,6 +67,10 @@ public partial class MainWindowViewModel(
     private Task _loadingFileTask = Task.CompletedTask;
 
     [ObservableProperty]
+    private bool _matchCase;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsInfoTextVisible))]
     private string _nodeInfoText = "";
 
     [ObservableProperty]
@@ -72,6 +86,7 @@ public partial class MainWindowViewModel(
     private GGPKTreeNode? _selectedGgpkSearchResult;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsInfoTextVisible))]
     private Bitmap? _selectedImage;
 
     [ObservableProperty]
@@ -80,13 +95,104 @@ public partial class MainWindowViewModel(
     [ObservableProperty]
     private bool _useRegex;
 
-    [ObservableProperty]
-    private bool _matchCase;
+    public bool IsDatViewVisible => DatInfoSource != null;
+
+    public bool IsInfoTextVisible => SelectedImage == null && !IsDatViewVisible;
 
     public ObservableCollection<GGPKTreeNode> GgpkSearchResults { get; } = new();
     public ObservableCollection<GGPKTreeNode> BundleSearchResults { get; } = new();
 
     public ObservableCollection<GGPKTreeNode> BundleTreeItems { get; } = new();
+
+    partial void OnDatViewBytesChanged(byte[]? value)
+    {
+        DatInfoSource = value == null ? null : CreateDatGridSource(value);
+    }
+
+    private static FlatTreeDataGridSource<DatRow>? CreateDatGridSource(byte[] data)
+    {
+        if (data.Length < 4)
+        {
+            return null;
+        }
+
+        var rowCount = BitConverter.ToInt32(data, 0);
+
+        long separatorIndex = -1;
+        // Search for 0xBBBBBBBBBBBBBBBB
+        var limit = data.Length - 8;
+        for (var i = 4; i <= limit; i++)
+        {
+            if (data[i] == 0xBB && data[i + 1] == 0xBB && data[i + 2] == 0xBB && data[i + 3] == 0xBB &&
+                data[i + 4] == 0xBB && data[i + 5] == 0xBB && data[i + 6] == 0xBB && data[i + 7] == 0xBB)
+            {
+                separatorIndex = i;
+                break;
+            }
+        }
+
+        var contentEnd = separatorIndex != -1 ? separatorIndex : data.Length;
+        var contentSize = contentEnd - 4;
+
+        if (rowCount <= 0)
+        {
+            return null;
+        }
+
+        var rowSize = (int)(contentSize / rowCount);
+        if (rowSize == 0)
+        {
+            return null;
+        }
+
+        var items = new ObservableCollection<DatRow>();
+
+        // Load all rows. Virtualization handles display.
+        for (var r = 0; r < rowCount; r++)
+        {
+            var rowStart = 4 + r * rowSize;
+            var rowValues = new string[rowSize];
+
+            for (var c = 0; c < rowSize; c++)
+            {
+                if (rowStart + c < data.Length)
+                {
+                    rowValues[c] = $"{data[rowStart + c]:X2}";
+                }
+                else
+                {
+                    rowValues[c] = "??";
+                }
+            }
+
+            items.Add(new DatRow(r, rowValues));
+        }
+
+        var source = new FlatTreeDataGridSource<DatRow>(items);
+
+        // Row Number Column
+        source.Columns.Add(new TextColumn<DatRow, int>("Row", x => x.Index));
+
+        // Determine hex digits needed for column headers
+        int maxIndex = rowSize - 1;
+        // e.g. 255 -> FF (2 chars), 256 -> 100 (3 chars)
+        // Default to X2, expand if needed
+        string colHeaderFormat = "X2";
+        if (maxIndex > 255)
+        {
+            // Log base 16
+            int digits = (int)Math.Floor(Math.Log(maxIndex, 16)) + 1;
+            colHeaderFormat = "X" + digits;
+        }
+
+        for (var i = 0; i < rowSize; i++)
+        {
+            var colIndex = i;
+            source.Columns.Add(new TextColumn<DatRow, string>($"{i.ToString(colHeaderFormat)}", x => x.Data[colIndex]));
+        }
+
+        return source;
+    }
 
     partial void OnSelectedGgpkSearchResultChanged(GGPKTreeNode? value)
     {
@@ -296,6 +402,7 @@ public partial class MainWindowViewModel(
 
         var (oldCts, token) = ResetCancellationSource();
         SelectedImage = null;
+        DatViewBytes = null;
         var fileInfo = nodeValue!;
         NodeInfoText = fileInfo.FileName;
         if (IsImageFile(fileInfo.FileName))
@@ -307,6 +414,12 @@ public partial class MainWindowViewModel(
         if (IsTextFile(fileInfo.FileName))
         {
             _loadingFileTask = ChainTextLoadingTask(_loadingFileTask, oldCts, token, fileInfo);
+            return;
+        }
+
+        if (IsDatFile(fileInfo.FileName))
+        {
+            _loadingFileTask = ChainDatLoadingTask(_loadingFileTask, oldCts, token, fileInfo);
             return;
         }
 
@@ -410,7 +523,7 @@ public partial class MainWindowViewModel(
         }
     }
 
-    private async Task<Bitmap?> ResolveDDSDataAsync(byte[] data)
+    private async Task<Bitmap?> ResolveDdsDataAsync(byte[] data)
     {
         var scratchImage = new DirectXTex.ScratchImage();
         var decompressedScratch = new DirectXTex.ScratchImage();
@@ -514,6 +627,45 @@ public partial class MainWindowViewModel(
         return null;
     }
 
+    private Task ChainDatLoadingTask(Task previousTask, CancellationTokenSource? oldCts, CancellationToken token,
+        GGPKFileInfo fileInfo)
+    {
+        return previousTask.ContinueWith(async _ =>
+        {
+            oldCts?.Dispose();
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            try
+            {
+                await LoadDatViewAsync(fileInfo, token);
+            }
+            catch (OperationCanceledException)
+            {
+                // ignore
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to load dat file: {ex.Message}");
+            }
+        }, TaskScheduler.Default).Unwrap();
+    }
+
+    private async Task LoadDatViewAsync(GGPKFileInfo ggpkFileInfo, CancellationToken token)
+    {
+        var data = await ggpkParsingService.LoadGGPKFileDataAsync(ggpkFileInfo, token);
+        Dispatcher.UIThread.Post(() => { DatViewBytes = data; });
+    }
+
+    private async Task LoadBundleDatViewAsync(GGPKFileInfo bundleFileInfo, BundleIndexInfo.FileRecord fileRecord,
+        CancellationToken token)
+    {
+        var data = await ggpkBundleService.LoadBundleFileDataAsync(bundleFileInfo, fileRecord, token);
+        Dispatcher.UIThread.Post(() => { DatViewBytes = data; });
+    }
+
     private Task ChainBundleFileLoadingTask(Task previousTask, CancellationTokenSource? oldCts, CancellationToken token,
         GGPKFileInfo bundleFileInfo, BundleIndexInfo.FileRecord fileRecord)
     {
@@ -528,6 +680,7 @@ public partial class MainWindowViewModel(
             try
             {
                 SelectedImage = null;
+                DatViewBytes = null;
                 if (IsTextFile(fileRecord.FileName))
                 {
                     var partialRecord = fileRecord;
@@ -546,19 +699,23 @@ public partial class MainWindowViewModel(
                         }
                     });
                 }
-                else if (IsDDSFile(fileRecord.FileName))
+                else if (IsDdsFile(fileRecord.FileName))
                 {
                     var data = await ggpkBundleService.LoadBundleFileDataAsync(bundleFileInfo,
                         fileRecord, token);
-                    var image = await ResolveDDSDataAsync(data);
+                    var image = await ResolveDdsDataAsync(data);
                     SelectedImage = image;
                 }
-                else if (IsDDSHeaderFile(fileRecord.FileName))
+                else if (IsDdsHeaderFile(fileRecord.FileName))
                 {
                     var data = (await ggpkBundleService.LoadBundleFileDataAsync(bundleFileInfo,
                         fileRecord, token)).Skip(28).ToArray();
-                    var image = await ResolveDDSDataAsync(data);
+                    var image = await ResolveDdsDataAsync(data);
                     SelectedImage = image;
+                }
+                else if (IsDatFile(fileRecord.FileName))
+                {
+                    await LoadBundleDatViewAsync(bundleFileInfo, fileRecord, token);
                 }
                 else
                 {
@@ -577,19 +734,24 @@ public partial class MainWindowViewModel(
     {
         return fileName.EndsWith(".txt", StringComparison.OrdinalIgnoreCase) ||
                fileName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase) ||
-               fileName.EndsWith(".dat", StringComparison.OrdinalIgnoreCase) ||
                fileName.EndsWith(".mat", StringComparison.OrdinalIgnoreCase) ||
                fileName.EndsWith(".ini", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool IsDDSFile(string fileName)
+    private static bool IsDdsFile(string fileName)
     {
         return fileName.EndsWith(".dds", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool IsDDSHeaderFile(string fileName)
+    private static bool IsDdsHeaderFile(string fileName)
     {
         return fileName.EndsWith(".dds.header", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsDatFile(string fileName)
+    {
+        return fileName.EndsWith(".dat", StringComparison.OrdinalIgnoreCase) ||
+               fileName.EndsWith(".datc64", StringComparison.OrdinalIgnoreCase);
     }
 
     private Task ChainTextLoadingTask(Task previousTask, CancellationTokenSource? oldCts, CancellationToken token,
@@ -1039,4 +1201,6 @@ public partial class MainWindowViewModel(
             }
         }
     }
+
+    public record DatRow(int Index, string[] Data);
 }
