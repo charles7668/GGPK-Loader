@@ -10,9 +10,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
-using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
-using Avalonia.Controls.Models.TreeDataGrid;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
@@ -44,7 +42,9 @@ public partial class MainWindowViewModel(
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsDatViewVisible))]
     [NotifyPropertyChangedFor(nameof(IsInfoTextVisible))]
-    private FlatTreeDataGridSource<DatRow>? _datInfoSource;
+    [NotifyPropertyChangedFor(nameof(IsDatViewVisible))]
+    [NotifyPropertyChangedFor(nameof(IsInfoTextVisible))]
+    private DatRowInfo? _datInfoSource;
 
     [ObservableProperty]
     private byte[]? _datViewBytes;
@@ -106,10 +106,10 @@ public partial class MainWindowViewModel(
 
     partial void OnDatViewBytesChanged(byte[]? value)
     {
-        DatInfoSource = value == null ? null : CreateDatGridSource(value);
+        DatInfoSource = value == null ? null : CreateDatRows(value);
     }
 
-    private static FlatTreeDataGridSource<DatRow>? CreateDatGridSource(byte[] data)
+    private static DatRowInfo? CreateDatRows(byte[] data)
     {
         if (data.Length < 4)
         {
@@ -145,53 +145,65 @@ public partial class MainWindowViewModel(
             return null;
         }
 
+        // Calculate cell width for alignment
+        var maxIndex = rowSize - 1;
+        var indexDigits = maxIndex > 255 ? (int)Math.Floor(Math.Log(maxIndex, 16)) + 1 : 2;
+        var cellWidth = Math.Max(2, indexDigits);
+        var headerFormat = "X" + indexDigits;
+
         var items = new ObservableCollection<DatRow>();
 
         // Load all rows. Virtualization handles display.
+        var sb = new StringBuilder();
         for (var r = 0; r < rowCount; r++)
         {
             var rowStart = 4 + r * rowSize;
-            var rowValues = new string[rowSize];
+            sb.Clear();
 
             for (var c = 0; c < rowSize; c++)
             {
+                if (c > 0)
+                {
+                    sb.Append(' ');
+                }
+
                 if (rowStart + c < data.Length)
                 {
-                    rowValues[c] = $"{data[rowStart + c]:X2}";
+                    // Align data to header width. 
+                    // Data is always 1 byte (2 hex chars). 
+                    // If cellWidth > 2, pad left with spaces.
+                    var hex = data[rowStart + c].ToString("X2");
+                    if (cellWidth > 2)
+                    {
+                        sb.Append(hex.PadLeft(cellWidth, ' '));
+                    }
+                    else
+                    {
+                        sb.Append(hex);
+                    }
                 }
                 else
                 {
-                    rowValues[c] = "??";
+                    sb.Append("??".PadLeft(cellWidth, ' '));
                 }
             }
 
-            items.Add(new DatRow(r, rowValues));
+            items.Add(new DatRow(r, sb.ToString()));
         }
 
-        var source = new FlatTreeDataGridSource<DatRow>(items);
-
-        // Row Number Column
-        source.Columns.Add(new TextColumn<DatRow, int>("Row", x => x.Index));
-
-        // Determine hex digits needed for column headers
-        int maxIndex = rowSize - 1;
-        // e.g. 255 -> FF (2 chars), 256 -> 100 (3 chars)
-        // Default to X2, expand if needed
-        string colHeaderFormat = "X2";
-        if (maxIndex > 255)
-        {
-            // Log base 16
-            int digits = (int)Math.Floor(Math.Log(maxIndex, 16)) + 1;
-            colHeaderFormat = "X" + digits;
-        }
-
+        // Generate Header String
+        var headerSb = new StringBuilder();
         for (var i = 0; i < rowSize; i++)
         {
-            var colIndex = i;
-            source.Columns.Add(new TextColumn<DatRow, string>($"{i.ToString(colHeaderFormat)}", x => x.Data[colIndex]));
+            if (i > 0)
+            {
+                headerSb.Append(' ');
+            }
+
+            headerSb.Append(i.ToString(headerFormat));
         }
 
-        return source;
+        return new DatRowInfo(items, headerSb.ToString());
     }
 
     partial void OnSelectedGgpkSearchResultChanged(GGPKTreeNode? value)
@@ -1202,5 +1214,7 @@ public partial class MainWindowViewModel(
         }
     }
 
-    public record DatRow(int Index, string[] Data);
+    public record DatRowInfo(ObservableCollection<DatRow> Rows, string ColumnHeaders);
+
+    public record DatRow(int Index, string DataText);
 }
