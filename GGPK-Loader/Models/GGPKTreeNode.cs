@@ -29,4 +29,25 @@ public partial class GGPKTreeNode : ObservableObject
         string s => s,
         _ => Value?.ToString() ?? ""
     };
+
+    public string FullPath
+    {
+        get
+        {
+            var stack = new Stack<string>();
+            var current = this;
+            while (current != null)
+            {
+                if (!string.IsNullOrEmpty(current.Name))
+                {
+                    stack.Push(current.Name);
+                }
+                current = current.Parent;
+            }
+
+            var result = string.Join("/", stack);
+            result = "/" + result.TrimStart('/');
+            return result;
+        }
+    }
 }

@@ -64,7 +64,7 @@
                              SelectedItem="{Binding SelectedGgpkSearchResult}">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <TextBlock Text="{Binding Name}" />
+                                <TextBlock Text="{Binding Name}" ToolTip.Tip="{Binding FullPath}" />
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
@@ -112,7 +112,7 @@
                              SelectedItem="{Binding SelectedBundleSearchResult}">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <TextBlock Text="{Binding Name}" />
+                                <TextBlock Text="{Binding Name}" ToolTip.Tip="{Binding FullPath}" />
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
