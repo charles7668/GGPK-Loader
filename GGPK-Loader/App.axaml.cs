@@ -1,16 +1,18 @@
+using System;
+using System.IO;
 using System.Linq;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Data.Core.Plugins;
 using Avalonia.Markup.Xaml;
+using GGPK_Loader.Services;
 using GGPK_Loader.ViewModels;
 using GGPK_Loader.Views;
-using GGPK_Loader.Services;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace GGPK_Loader;
 
-public partial class App : Application
+public class App : Application
 {
     public override void Initialize()
     {
@@ -31,9 +33,14 @@ public partial class App : Application
             collection.AddSingleton<IStreamManager, StreamManager>();
             collection.AddSingleton<IGgpkParsingService, GgpkParsingService>();
             collection.AddSingleton<IGgpkBundleService, GgpkBundleService>();
+            collection.AddSingleton<ISchemaService, SchemaService>();
             collection.AddSingleton<MainWindowViewModel>();
 
             var services = collection.BuildServiceProvider();
+
+            var schemaService = services.GetRequiredService<ISchemaService>();
+            var schemaPath = Path.Combine(AppContext.BaseDirectory, "deps", "schema.min.json");
+            schemaService.LoadSchema(schemaPath);
 
             var mainWindow = services.GetRequiredService<MainWindow>();
             mainWindow.DataContext = services.GetRequiredService<MainWindowViewModel>();

@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -11,12 +12,14 @@ using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using GGPK_Loader.Models;
+using GGPK_Loader.Models.Schema;
 using GGPK_Loader.Services;
 using GGPK_Loader.Utils;
 using JetBrains.Annotations;
@@ -28,16 +31,21 @@ public partial class MainWindowViewModel(
     IFileService fileService,
     IMessageService messageService,
     IGgpkParsingService ggpkParsingService,
-    IGgpkBundleService ggpkBundleService) : ViewModelBase
+    IGgpkBundleService ggpkBundleService,
+    ISchemaService schemaService) : ViewModelBase
 {
     // For Design Time Preview
-    public MainWindowViewModel() : this(null!, null!, null!, null!)
+    public MainWindowViewModel() : this(null!, null!, null!, null!, null!)
     {
         // Design-time constructor
     }
 
+    private static readonly Typeface TypeFace = new("Consolas");
+
     [ObservableProperty]
     private string _buttonText = "Open";
+
+    private string _currentDatFileName = "";
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsDatViewVisible))]
@@ -109,7 +117,7 @@ public partial class MainWindowViewModel(
         DatInfoSource = value == null ? null : CreateDatRows(value);
     }
 
-    private static DatRowInfo? CreateDatRows(byte[] data)
+    private DatRowInfo? CreateDatRows(byte[] data)
     {
         if (data.Length < 4)
         {
@@ -118,6 +126,7 @@ public partial class MainWindowViewModel(
 
         var rowCount = BitConverter.ToInt32(data, 0);
 
+        // Check actual row size first to validate schema
         long separatorIndex = -1;
         // Search for 0xBBBBBBBBBBBBBBBB
         var limit = data.Length - 8;
@@ -133,7 +142,129 @@ public partial class MainWindowViewModel(
 
         var contentEnd = separatorIndex != -1 ? separatorIndex : data.Length;
         var contentSize = contentEnd - 4;
+        var actualRowSize = rowCount > 0 ? (int)(contentSize / rowCount) : 0;
 
+        // Try to load schema
+        var tableName = Path.GetFileNameWithoutExtension(_currentDatFileName);
+        int[]? validVersions = null;
+        if (_currentDatFileName.EndsWith(".datc64", StringComparison.OrdinalIgnoreCase))
+        {
+            validVersions = new[] { 2, 3 };
+        }
+        else
+        {
+            validVersions = new[] { 1, 3 };
+        }
+
+        var columns = schemaService.GetColumns(tableName, validVersions);
+
+        if (columns != null)
+        {
+            var is64Bit = _currentDatFileName.EndsWith("64", StringComparison.OrdinalIgnoreCase);
+            var calculatedRowSize = 0;
+            foreach (var col in columns)
+            {
+                calculatedRowSize += GetColumnSize(col, is64Bit);
+            }
+
+            if (calculatedRowSize > 0)
+            {
+                var effectiveRowSize = actualRowSize > 0 ? actualRowSize : calculatedRowSize;
+                var extraBytes = Math.Max(0, effectiveRowSize - calculatedRowSize);
+
+                var totalColumns = columns.Count + extraBytes;
+                var headers = new List<string>(totalColumns);
+                var columnWidths = new double[totalColumns];
+
+                // Schema Headers
+                for (var i = 0; i < columns.Count; i++)
+                {
+                    headers.Add(columns[i].Name ?? "Unk");
+                    columnWidths[i] = GetTextWidth(headers[i]);
+                }
+
+                // Extra Byte Headers
+                for (var i = 0; i < extraBytes; i++)
+                {
+                    var h = i.ToString("X2");
+                    headers.Add(h);
+                    columnWidths[columns.Count + i] = Math.Max(GetTextWidth("00"), GetTextWidth(h));
+                }
+
+                var items = new ObservableCollection<DatRow>();
+
+                for (var r = 0; r < rowCount; r++)
+                {
+                    var rowStart = 4 + r * effectiveRowSize;
+                    if (rowStart + effectiveRowSize > data.Length)
+                    {
+                        break;
+                    }
+
+                    var rowValues = new string[totalColumns];
+                    var offset = 0;
+
+                    // Read Schema Columns
+                    for (var c = 0; c < columns.Count; c++)
+                    {
+                        var col = columns[c];
+                        var size = GetColumnSize(col, is64Bit);
+                        var val = ReadColumnValue(data, rowStart + offset, col, is64Bit, separatorIndex);
+                        rowValues[c] = val;
+
+                        var w = GetTextWidth(val);
+                        if (w > columnWidths[c])
+                        {
+                            columnWidths[c] = w;
+                        }
+
+                        offset += size;
+                    }
+
+                    // Read Extra Bytes
+                    for (var i = 0; i < extraBytes; i++)
+                    {
+                        var colIdx = columns.Count + i;
+                        if (rowStart + offset + i < data.Length)
+                        {
+                            var b = data[rowStart + offset + i];
+                            var val = b.ToString("X2");
+                            rowValues[colIdx] = val;
+
+                            var w = GetTextWidth(val);
+                            if (w > columnWidths[colIdx])
+                            {
+                                columnWidths[colIdx] = w;
+                            }
+                        }
+                        else
+                        {
+                            rowValues[colIdx] = "??";
+                        }
+                    }
+
+                    items.Add(new DatRow(r, rowValues));
+                }
+
+                // Add padding to widths
+                for (var i = 0; i < columnWidths.Length; i++)
+                {
+                    columnWidths[i] += 20;
+                }
+
+                // Add Row Index Column Width
+                // "Row" length is 3 or calculated from Max Index 
+                var maxIndexStr = (rowCount - 1).ToString();
+                var indexWidth = Math.Max(GetTextWidth("Row"), GetTextWidth(maxIndexStr)) + 20;
+
+                var finalWidths = new List<double> { indexWidth };
+                finalWidths.AddRange(columnWidths);
+
+                return new DatRowInfo(items, headers, finalWidths);
+            }
+        }
+
+        // Fallback to heuristic
         if (rowCount <= 0)
         {
             return null;
@@ -145,65 +276,159 @@ public partial class MainWindowViewModel(
             return null;
         }
 
-        // Calculate cell width for alignment
         var maxIndex = rowSize - 1;
         var indexDigits = maxIndex > 255 ? (int)Math.Floor(Math.Log(maxIndex, 16)) + 1 : 2;
-        var cellWidth = Math.Max(2, indexDigits);
         var headerFormat = "X" + indexDigits;
 
-        var items = new ObservableCollection<DatRow>();
+        var itemsFallback = new ObservableCollection<DatRow>();
+        var widthsFallback = new double[rowSize];
+        var headersFallback = new List<string>();
 
-        // Load all rows. Virtualization handles display.
-        var sb = new StringBuilder();
+        for (var i = 0; i < rowSize; i++)
+        {
+            var h = i.ToString(headerFormat);
+            headersFallback.Add(h);
+            widthsFallback[i] = GetTextWidth(h);
+        }
+
         for (var r = 0; r < rowCount; r++)
         {
             var rowStart = 4 + r * rowSize;
-            sb.Clear();
+            var rowValues = new string[rowSize];
 
             for (var c = 0; c < rowSize; c++)
             {
-                if (c > 0)
-                {
-                    sb.Append(' ');
-                }
-
                 if (rowStart + c < data.Length)
                 {
-                    // Align data to header width. 
-                    // Data is always 1 byte (2 hex chars). 
-                    // If cellWidth > 2, pad left with spaces.
-                    var hex = data[rowStart + c].ToString("X2");
-                    if (cellWidth > 2)
-                    {
-                        sb.Append(hex.PadLeft(cellWidth, ' '));
-                    }
-                    else
-                    {
-                        sb.Append(hex);
-                    }
+                    rowValues[c] = data[rowStart + c].ToString("X2");
                 }
                 else
                 {
-                    sb.Append("??".PadLeft(cellWidth, ' '));
+                    rowValues[c] = "??";
+                }
+
+                var w = GetTextWidth(rowValues[c]);
+                if (w > widthsFallback[c])
+                {
+                    widthsFallback[c] = w;
                 }
             }
 
-            items.Add(new DatRow(r, sb.ToString()));
+            itemsFallback.Add(new DatRow(r, rowValues));
         }
 
-        // Generate Header String
-        var headerSb = new StringBuilder();
-        for (var i = 0; i < rowSize; i++)
+        for (var i = 0; i < widthsFallback.Length; i++)
         {
-            if (i > 0)
-            {
-                headerSb.Append(' ');
-            }
-
-            headerSb.Append(i.ToString(headerFormat));
+            widthsFallback[i] += 20;
         }
 
-        return new DatRowInfo(items, headerSb.ToString());
+        // Add Row Index Column Width Fallback
+        var maxIndexStrFallback = (rowCount - 1).ToString();
+        var indexWidthFallback = Math.Max(GetTextWidth("Row"), GetTextWidth(maxIndexStrFallback)) + 20;
+
+        var finalWidthsFallback = new List<double>();
+        finalWidthsFallback.Add(indexWidthFallback);
+        finalWidthsFallback.AddRange(widthsFallback);
+
+        return new DatRowInfo(itemsFallback, headersFallback, finalWidthsFallback);
+    }
+
+    private static double GetTextWidth(string text)
+    {
+        var ft = new FormattedText(
+            text,
+            CultureInfo.CurrentCulture,
+            FlowDirection.LeftToRight,
+            TypeFace,
+            14,
+            null
+        );
+        return ft.WidthIncludingTrailingWhitespace;
+    }
+
+    private static int GetColumnSize(SchemaColumn col, bool is64Bit)
+    {
+        if (col.Array)
+        {
+            return is64Bit ? 16 : 8;
+        }
+
+        return col.Type switch
+        {
+            "bool" => 1,
+            "i16" or "u16" => 2,
+            "i32" or "u32" or "f32" => 4,
+            "i64" or "u64" => 8,
+            "string" => is64Bit ? 8 : 4,
+            "foreignrow" => is64Bit ? 16 : 4,
+            "row" => is64Bit ? 8 : 4,
+            "enumrow" => 4,
+            "rid" => is64Bit ? 16 : 4,
+            _ => 1
+        };
+    }
+
+    private static string ReadColumnValue(byte[] data, int offset, SchemaColumn col, bool is64Bit, long baseOffset)
+    {
+        var size = GetColumnSize(col, is64Bit);
+        if (offset + size > data.Length)
+        {
+            return "ERR";
+        }
+
+        if (col.Array)
+        {
+            var count = is64Bit ? BitConverter.ToInt64(data, offset) : BitConverter.ToInt32(data, offset);
+            return $"[{count}]";
+        }
+
+        switch (col.Type)
+        {
+            case "bool":
+                return data[offset] != 0 ? "True" : "False";
+            case "i16": return BitConverter.ToInt16(data, offset).ToString();
+            case "i32": return BitConverter.ToInt32(data, offset).ToString();
+            case "i64": return BitConverter.ToInt64(data, offset).ToString();
+            case "u16": return BitConverter.ToUInt16(data, offset).ToString();
+            case "u32": return BitConverter.ToUInt32(data, offset).ToString();
+            case "u64": return BitConverter.ToUInt64(data, offset).ToString();
+            case "f32": return BitConverter.ToSingle(data, offset).ToString("F2");
+            case "f64": return BitConverter.ToDouble(data, offset).ToString("F2");
+            case "string":
+                var sRel = is64Bit ? BitConverter.ToInt64(data, offset) : BitConverter.ToUInt32(data, offset);
+                var sPtr = baseOffset + sRel;
+
+                // If baseOffset is invalid (-1) or result is out of bounds
+                if (baseOffset >= 0 && sPtr >= 0 && sPtr < data.Length)
+                {
+                    var start = (int)sPtr;
+                    var len = 0;
+                    while (start + len + 1 < data.Length)
+                    {
+                        if (data[start + len] == 0 && data[start + len + 1] == 0)
+                        {
+                            break;
+                        }
+
+                        len += 2;
+                    }
+
+                    return Encoding.Unicode.GetString(data, start, len);
+                }
+
+                return $"Ptr({sRel:X})";
+            case "foreignrow":
+                var key = is64Bit ? BitConverter.ToUInt64(data, offset) : BitConverter.ToUInt32(data, offset);
+                return $"FK({key:X})";
+            case "row":
+                var rKey = is64Bit ? BitConverter.ToUInt64(data, offset) : BitConverter.ToUInt32(data, offset);
+                return $"Row({rKey:X})";
+            case "enumrow":
+                var eKey = BitConverter.ToInt32(data, offset);
+                return $"Enum({eKey:X})";
+            default:
+                return "??";
+        }
     }
 
     partial void OnSelectedGgpkSearchResultChanged(GGPKTreeNode? value)
@@ -667,6 +892,7 @@ public partial class MainWindowViewModel(
 
     private async Task LoadDatViewAsync(GGPKFileInfo ggpkFileInfo, CancellationToken token)
     {
+        _currentDatFileName = ggpkFileInfo.FileName;
         var data = await ggpkParsingService.LoadGGPKFileDataAsync(ggpkFileInfo, token);
         Dispatcher.UIThread.Post(() => { DatViewBytes = data; });
     }
@@ -674,6 +900,7 @@ public partial class MainWindowViewModel(
     private async Task LoadBundleDatViewAsync(GGPKFileInfo bundleFileInfo, BundleIndexInfo.FileRecord fileRecord,
         CancellationToken token)
     {
+        _currentDatFileName = fileRecord.FileName;
         var data = await ggpkBundleService.LoadBundleFileDataAsync(bundleFileInfo, fileRecord, token);
         Dispatcher.UIThread.Post(() => { DatViewBytes = data; });
     }
@@ -691,8 +918,11 @@ public partial class MainWindowViewModel(
 
             try
             {
-                SelectedImage = null;
-                DatViewBytes = null;
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    SelectedImage = null;
+                    DatViewBytes = null;
+                });
                 if (IsTextFile(fileRecord.FileName))
                 {
                     var partialRecord = fileRecord;
@@ -716,14 +946,14 @@ public partial class MainWindowViewModel(
                     var data = await ggpkBundleService.LoadBundleFileDataAsync(bundleFileInfo,
                         fileRecord, token);
                     var image = await ResolveDdsDataAsync(data);
-                    SelectedImage = image;
+                    await Dispatcher.UIThread.InvokeAsync(() => { SelectedImage = image; });
                 }
                 else if (IsDdsHeaderFile(fileRecord.FileName))
                 {
                     var data = (await ggpkBundleService.LoadBundleFileDataAsync(bundleFileInfo,
                         fileRecord, token)).Skip(28).ToArray();
                     var image = await ResolveDdsDataAsync(data);
-                    SelectedImage = image;
+                    await Dispatcher.UIThread.InvokeAsync(() => { SelectedImage = image; });
                 }
                 else if (IsDatFile(fileRecord.FileName))
                 {
@@ -1214,7 +1444,8 @@ public partial class MainWindowViewModel(
         }
     }
 
-    public record DatRowInfo(ObservableCollection<DatRow> Rows, string ColumnHeaders);
+    public record DatRowInfo(ObservableCollection<DatRow> Rows, List<string> Headers, List<double> ColumnWidths);
 
-    public record DatRow(int Index, string DataText);
+    [UsedImplicitly(ImplicitUseTargetFlags.WithMembers)]
+    public record DatRow(int Index, string[] Values);
 }

@@ -125,84 +125,57 @@
             <Panel Grid.Column="4">
                 <TextBox Text="{Binding NodeInfoText}" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True"
                          ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         FontFamily="Consolas"
                          IsVisible="{Binding IsInfoTextVisible}" />
+                
                 <Grid RowDefinitions="Auto, *" ColumnDefinitions="Auto, *" IsVisible="{Binding IsDatViewVisible}">
-
-                    <!-- Top Left: Row Header Title -->
-                    <Border Grid.Row="0" Grid.Column="0" Background="#252526" BorderBrush="#3F3F46"
-                            BorderThickness="0,0,1,1">
-                        <TextBlock Text="Row" FontWeight="Bold" Margin="4,4" Width="50" TextAlignment="Right"
-                                   Foreground="#CCCCCC" />
+                    <!-- Top Left: Row Header -->
+                    <Border Grid.Row="0" Grid.Column="0" Background="#1E1E1E" Padding="0,4">
+                         <TextBlock x:Name="RowHeaderLabel" FontWeight="Bold" Foreground="LightGray" Margin="5,0" VerticalAlignment="Center" TextAlignment="Right" />
                     </Border>
-
-                    <!-- Top Right: Column Headers (Horizontal Scroll Only) -->
-                    <Border Grid.Row="0" Grid.Column="1" Background="#252526" BorderBrush="#3F3F46"
-                            BorderThickness="0,0,0,1">
-                        <ScrollViewer x:Name="HeaderScrollViewer"
-                                      HorizontalScrollBarVisibility="Hidden"
-                                      VerticalScrollBarVisibility="Disabled">
-                            <TextBlock Text="{Binding DatInfoSource.ColumnHeaders}"
-                                       FontFamily="Consolas, Monospace"
-                                       FontSize="14"
-                                       Foreground="#CCCCCC"
-                                       Margin="4,4" />
-                        </ScrollViewer>
-                    </Border>
-
-                    <!-- Bottom Left: Row Indices (Synced Vertical Scroll) -->
-                    <ListBox Grid.Row="1" Grid.Column="0"
-                             x:Name="IndexListBox"
+                    
+                    <!-- Top Right: Headers -->
+                    <ScrollViewer Grid.Row="0" Grid.Column="1" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
+                                  x:Name="HeaderScrollViewer">
+                        <StackPanel x:Name="HeaderContainer" Orientation="Horizontal" Margin="4"/>
+                    </ScrollViewer>
+                        
+                    <!-- Bottom Left: Index -->
+                    <ListBox Grid.Row="1" Grid.Column="0" x:Name="IndexListBox"
                              ItemsSource="{Binding DatInfoSource.Rows}"
+                             Background="#1E1E1E"
                              ScrollViewer.VerticalScrollBarVisibility="Hidden"
-                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                             Background="#252526"
-                             Padding="0">
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <VirtualizingStackPanel />
+                            </ItemsPanelTemplate>
+                        </ListBox.ItemsPanel>
                         <ListBox.Styles>
                             <Style Selector="ListBoxItem">
                                 <Setter Property="Padding" Value="0" />
                                 <Setter Property="Margin" Value="0" />
-                                <Setter Property="MinHeight" Value="20" />
                             </Style>
                         </ListBox.Styles>
-                        <ListBox.ItemTemplate>
-                            <DataTemplate>
-                                <TextBlock Text="{Binding Index, StringFormat='\{0:D\}'}"
-                                           Width="50"
-                                           FontWeight="Bold"
-                                           TextAlignment="Right"
-                                           FontSize="14"
-                                           Foreground="#858585"
-                                           Margin="4,0"
-                                           VerticalAlignment="Center" />
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
                     </ListBox>
 
-                    <!-- Bottom Right: Data Cells (Main Scroll) -->
-                    <ListBox Grid.Row="1" Grid.Column="1"
-                             x:Name="DataListBox"
+                    <!-- Bottom Right: Rows -->
+                    <ListBox Grid.Row="1" Grid.Column="1" x:Name="DataListBox" 
                              ItemsSource="{Binding DatInfoSource.Rows}"
-                             ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                             ScrollViewer.VerticalScrollBarVisibility="Auto"
                              Background="#1E1E1E"
-                             Padding="0">
+                             ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                             ScrollViewer.VerticalScrollBarVisibility="Visible">
+                        <ListBox.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <VirtualizingStackPanel />
+                            </ItemsPanelTemplate>
+                        </ListBox.ItemsPanel>
                         <ListBox.Styles>
                             <Style Selector="ListBoxItem">
                                 <Setter Property="Padding" Value="0" />
                                 <Setter Property="Margin" Value="0" />
-                                <Setter Property="MinHeight" Value="20" />
                             </Style>
                         </ListBox.Styles>
-                        <ListBox.ItemTemplate>
-                            <DataTemplate>
-                                <TextBlock Text="{Binding DataText}"
-                                           FontFamily="Consolas, Monospace"
-                                           FontSize="14"
-                                           Foreground="#D4D4D4"
-                                           Margin="4,0"
-                                           VerticalAlignment="Center" />
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
                     </ListBox>
                 </Grid>
                 <Image Source="{Binding SelectedImage}" HorizontalAlignment="Center" VerticalAlignment="Center"

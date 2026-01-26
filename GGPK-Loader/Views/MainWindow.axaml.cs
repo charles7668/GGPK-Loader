@@ -1,7 +1,14 @@
+using System;
 using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Templates;
+using Avalonia.Data;
+using Avalonia.Layout;
+using Avalonia.Media;
 using Avalonia.VisualTree;
+using GGPK_Loader.ViewModels;
+// Needed for GetVisualDescendants
 
 namespace GGPK_Loader.Views;
 
@@ -10,34 +17,126 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _listBox = this.FindControl<ListBox>("DataListBox");
+        _indexListBox = this.FindControl<ListBox>("IndexListBox");
+        _headerPanel = this.FindControl<StackPanel>("HeaderContainer");
+        _rowHeaderLabel = this.FindControl<TextBlock>("RowHeaderLabel");
 
-        var dataListBox = this.FindControl<ListBox>("DataListBox");
-        var indexListBox = this.FindControl<ListBox>("IndexListBox");
-        var headerScrollViewer = this.FindControl<ScrollViewer>("HeaderScrollViewer");
+        DataContextChanged += OnDataContextChanged;
+    }
 
-        if (dataListBox != null)
+    private readonly StackPanel? _headerPanel;
+    private readonly ListBox? _indexListBox;
+    private readonly ListBox? _listBox;
+    private readonly TextBlock? _rowHeaderLabel;
+
+    private void OnDataContextChanged(object? sender, EventArgs e)
+    {
+        if (DataContext is MainWindowViewModel vm)
         {
-            dataListBox.AddHandler(ScrollViewer.ScrollChangedEvent, (s, e) =>
+            vm.PropertyChanged += (_, args) =>
             {
-                if (e.Source is not ScrollViewer mainScrollViewer)
+                if (args.PropertyName == nameof(MainWindowViewModel.DatInfoSource))
                 {
-                    return;
+                    UpdateLayout(vm.DatInfoSource);
                 }
+            };
 
-                if (indexListBox != null)
-                {
-                    var indexScrollViewer = indexListBox.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
-                    if (indexScrollViewer != null)
-                    {
-                        indexScrollViewer.Offset = new Vector(indexScrollViewer.Offset.X, mainScrollViewer.Offset.Y);
-                    }
-                }
+            if (vm.DatInfoSource != null)
+            {
+                UpdateLayout(vm.DatInfoSource);
+            }
+        }
+    }
 
-                if (headerScrollViewer != null)
-                {
-                    headerScrollViewer.Offset = new Vector(mainScrollViewer.Offset.X, headerScrollViewer.Offset.Y);
-                }
+    private void UpdateLayout(MainWindowViewModel.DatRowInfo? info)
+    {
+        if (_listBox == null || _headerPanel == null || _indexListBox == null || _rowHeaderLabel == null)
+        {
+            return;
+        }
+
+        _headerPanel.Children.Clear();
+        _listBox.ItemTemplate = null;
+        _indexListBox.ItemTemplate = null;
+
+        if (info == null)
+        {
+            return;
+        }
+
+        _rowHeaderLabel.Text = "Row";
+        _rowHeaderLabel.Width = info.ColumnWidths[0];
+
+        for (var i = 0; i < info.Headers.Count; i++)
+        {
+            _headerPanel.Children.Add(new TextBlock
+            {
+                Text = info.Headers[i],
+                Width = info.ColumnWidths[i + 1], // +1 because index 0 is Row width
+                FontWeight = FontWeight.Bold,
+                Foreground = Brushes.LightGray,
+                Margin = new Thickness(5, 0)
             });
         }
+
+        _indexListBox.ItemTemplate = new FuncDataTemplate<MainWindowViewModel.DatRow>((_, _) =>
+        {
+            var tb = new TextBlock
+            {
+                Width = info.ColumnWidths[0],
+                FontFamily = "Consolas",
+                Margin = new Thickness(5, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                Foreground = Brushes.Gray,
+                TextAlignment = TextAlignment.Right
+            };
+            tb.Bind(TextBlock.TextProperty, new Binding("Index"));
+            return tb;
+        });
+
+        _listBox.ItemTemplate = new FuncDataTemplate<MainWindowViewModel.DatRow>((_, _) =>
+        {
+            var panel = new StackPanel { Orientation = Orientation.Horizontal };
+
+            for (var i = 0; i < info.Headers.Count; i++)
+            {
+                var tb = new TextBlock
+                {
+                    Width = info.ColumnWidths[i + 1], // +1 skip Row width
+                    FontFamily = "Consolas",
+                    Margin = new Thickness(5, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                tb.Bind(TextBlock.TextProperty, new Binding($"Values[{i}]"));
+                panel.Children.Add(tb);
+            }
+
+            return panel;
+        });
+
+        // Sync Scroll Logic
+        var headerScroll = this.FindControl<ScrollViewer>("HeaderScrollViewer");
+
+        // When DataListBox scrolls...
+        _listBox.AddHandler(ScrollViewer.ScrollChangedEvent, (_, e) =>
+        {
+            if (e.Source is ScrollViewer mainScrollViewer)
+            {
+                // Sync Horizontal Scroll -> Header
+                if (headerScroll != null)
+                {
+                    headerScroll.Offset = new Vector(mainScrollViewer.Offset.X, headerScroll.Offset.Y);
+                }
+
+                // Sync Vertical Scroll -> IndexListBox
+                // We need to find the ScrollViewer inside IndexListBox
+                var indexScrollViewer = _indexListBox.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
+                if (indexScrollViewer != null)
+                {
+                    indexScrollViewer.Offset = new Vector(indexScrollViewer.Offset.X, mainScrollViewer.Offset.Y);
+                }
+            }
+        });
     }
 }
