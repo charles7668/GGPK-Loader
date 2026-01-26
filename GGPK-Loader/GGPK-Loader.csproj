@@ -19,6 +19,9 @@
     <None Update="deps\oo2core_8_win64.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Update="deps\schema.min.json">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
   <ItemGroup>
