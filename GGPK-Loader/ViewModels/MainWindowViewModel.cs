@@ -992,8 +992,7 @@ public partial class MainWindowViewModel(
 
     private static bool IsDatFile(string fileName)
     {
-        return fileName.EndsWith(".dat", StringComparison.OrdinalIgnoreCase) ||
-               fileName.EndsWith(".datc64", StringComparison.OrdinalIgnoreCase);
+        return fileName.EndsWith(".datc64", StringComparison.OrdinalIgnoreCase);
     }
 
     private Task ChainTextLoadingTask(Task previousTask, CancellationTokenSource? oldCts, CancellationToken token,
