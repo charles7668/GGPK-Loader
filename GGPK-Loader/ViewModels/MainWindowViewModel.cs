@@ -510,15 +510,7 @@ public partial class MainWindowViewModel(
                 }
             });
 
-            if (GgpkSearchResults.Count > 0)
-            {
-                SelectedGgpkSearchResult = GgpkSearchResults[0];
-            }
 
-            if (BundleSearchResults.Count > 0)
-            {
-                SelectedBundleSearchResult = BundleSearchResults[0];
-            }
 
             if (GgpkSearchResults.Count == 0 && BundleSearchResults.Count == 0)
             {
