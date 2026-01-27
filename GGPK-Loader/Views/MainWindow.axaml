@@ -39,7 +39,7 @@
                     </TreeView.Styles>
                     <TreeView.ItemTemplate>
                         <TreeDataTemplate ItemsSource="{Binding Children}">
-                            <Grid Background="Transparent">
+                            <Grid Background="Transparent" PointerPressed="OnNodePointerPressed">
                                 <TextBlock Text="{Binding Name}">
                                     <TextBlock.ContextMenu>
                                         <ContextMenu>
@@ -88,7 +88,7 @@
                     </TreeView.Styles>
                     <TreeView.ItemTemplate>
                         <TreeDataTemplate ItemsSource="{Binding Children}">
-                            <Grid Background="Transparent">
+                            <Grid Background="Transparent" PointerPressed="OnNodePointerPressed">
                                 <TextBlock Text="{Binding Value}" />
                                 <Grid.ContextMenu>
                                     <ContextMenu>
@@ -127,19 +127,21 @@
                          ScrollViewer.VerticalScrollBarVisibility="Auto"
                          FontFamily="Consolas"
                          IsVisible="{Binding IsInfoTextVisible}" />
-                
+
                 <Grid RowDefinitions="Auto, *" ColumnDefinitions="Auto, *" IsVisible="{Binding IsDatViewVisible}">
                     <!-- Top Left: Row Header -->
                     <Border Grid.Row="0" Grid.Column="0" Background="#1E1E1E" Padding="0,4">
-                         <TextBlock x:Name="RowHeaderLabel" FontWeight="Bold" Foreground="LightGray" Margin="5,0" VerticalAlignment="Center" TextAlignment="Right" />
+                        <TextBlock x:Name="RowHeaderLabel" FontWeight="Bold" Foreground="LightGray" Margin="5,0"
+                                   VerticalAlignment="Center" TextAlignment="Right" />
                     </Border>
-                    
+
                     <!-- Top Right: Headers -->
-                    <ScrollViewer Grid.Row="0" Grid.Column="1" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
+                    <ScrollViewer Grid.Row="0" Grid.Column="1" HorizontalScrollBarVisibility="Hidden"
+                                  VerticalScrollBarVisibility="Disabled"
                                   x:Name="HeaderScrollViewer">
-                        <StackPanel x:Name="HeaderContainer" Orientation="Horizontal" Margin="4"/>
+                        <StackPanel x:Name="HeaderContainer" Orientation="Horizontal" Margin="4" />
                     </ScrollViewer>
-                        
+
                     <!-- Bottom Left: Index -->
                     <ListBox Grid.Row="1" Grid.Column="0" x:Name="IndexListBox"
                              ItemsSource="{Binding DatInfoSource.Rows}"
@@ -160,7 +162,7 @@
                     </ListBox>
 
                     <!-- Bottom Right: Rows -->
-                    <ListBox Grid.Row="1" Grid.Column="1" x:Name="DataListBox" 
+                    <ListBox Grid.Row="1" Grid.Column="1" x:Name="DataListBox"
                              ItemsSource="{Binding DatInfoSource.Rows}"
                              Background="#1E1E1E"
                              ScrollViewer.HorizontalScrollBarVisibility="Auto"

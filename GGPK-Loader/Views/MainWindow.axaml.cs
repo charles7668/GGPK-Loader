@@ -4,10 +4,12 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Data;
+using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.VisualTree;
 using GGPK_Loader.ViewModels;
+
 // Needed for GetVisualDescendants
 
 namespace GGPK_Loader.Views;
@@ -138,5 +140,16 @@ public partial class MainWindow : Window
                 }
             }
         });
+    }
+
+    private void OnNodePointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        var properties = e.GetCurrentPoint(sender as Visual).Properties;
+        if (properties.IsRightButtonPressed)
+        {
+            // Consume the event to prevent the TreeViewItem from processing it (which causes selection change)
+            // The ContextMenu triggers on a separate event (ContextRequested) or is handled before this suppression affects it.
+            e.Handled = true;
+        }
     }
 }
