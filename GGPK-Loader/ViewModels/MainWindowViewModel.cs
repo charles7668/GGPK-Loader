@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -322,7 +323,7 @@ public partial class MainWindowViewModel(
                 _originalDatRows = allRows;
                 var items = new ObservableCollection<DatRow>(allRows);
 
-                return new DatRowInfo(items, headers, finalWidths);
+                return new DatRowInfo(items, headers, finalWidths, columns);
             }
         }
 
@@ -1582,7 +1583,337 @@ public partial class MainWindowViewModel(
         }
     }
 
-    public record DatRowInfo(ObservableCollection<DatRow> Rows, List<string> Headers, List<double> ColumnWidths);
+    [RelayCommand]
+    private async Task CopyDatRowJson(object? parameter)
+    {
+        if (parameter == null || DatInfoSource == null || DatInfoSource.Columns == null)
+        {
+            return;
+        }
+
+        var rows = new List<DatRow>();
+        if (parameter is DatRow singleRow)
+        {
+            rows.Add(singleRow);
+        }
+        else if (parameter is IEnumerable list)
+        {
+            // Materialize the list first to avoid any potential enumeration issues with live collections
+            var items = list.Cast<object>().ToList();
+            foreach (var item in items)
+            {
+                if (item is DatRow r)
+                {
+                    rows.Add(r);
+                }
+            }
+        }
+
+        if (rows.Count == 0)
+        {
+            return;
+        }
+
+        if (rows.Count > 1)
+        {
+            rows.Sort((a, b) => a.Index.CompareTo(b.Index));
+        }
+
+        // Debug: Check count
+        // await messageService.ShowErrorMessageAsync($"Exporting {rows.Count} rows..."); 
+
+        IsLoading = true;
+        var columns = DatInfoSource.Columns;
+
+        try
+        {
+            var resultList = new List<Dictionary<string, object?>>();
+
+            await Task.Run(async () =>
+            {
+                foreach (var row in rows)
+                {
+                    var rowObj = new Dictionary<string, object?>();
+                    rowObj["_Index"] = row.Index;
+
+                    for (var i = 0; i < columns.Count; i++)
+                    {
+                        var col = columns[i];
+                        if (i >= row.Values.Length)
+                        {
+                            break;
+                        }
+
+                        var valStr = row.Values[i];
+                        var colName = col.Name ?? $"Col{i}";
+
+                        // Check if it's a Foreign Row that we want to resolve
+                        if (col.Type == "foreignrow" && valStr != "null" && valStr.StartsWith("FK("))
+                        {
+                            var targetTable = col.References?.Table;
+                            if (string.IsNullOrEmpty(targetTable))
+                            {
+                                targetTable = col.Name;
+                            }
+
+                            var hexId = valStr.Substring(3, valStr.Length - 4);
+                            if (!string.IsNullOrEmpty(targetTable) &&
+                                long.TryParse(hexId, NumberStyles.HexNumber, null, out var id))
+                            {
+                                try
+                                {
+                                    var foreignData = await ResolveForeignRow(targetTable, id);
+                                    rowObj[colName] = foreignData ?? valStr;
+                                }
+                                catch
+                                {
+                                    rowObj[colName] = valStr;
+                                }
+                            }
+                            else
+                            {
+                                rowObj[colName] = valStr;
+                            }
+                        }
+                        else
+                        {
+                            rowObj[colName] = valStr;
+                        }
+                    }
+
+                    resultList.Add(rowObj);
+                }
+            });
+
+            var json = JsonSerializer.Serialize(resultList, new JsonSerializerOptions { WriteIndented = true });
+
+            if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+            {
+                if (desktop.MainWindow?.Clipboard is { } clipboard)
+                {
+                    await clipboard.SetTextAsync(json);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            await messageService.ShowErrorMessageAsync($"JSON Export Failed: {ex.Message}");
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    private async Task<object?> ResolveForeignRow(string? tableName, long id, int currentDepth = 0)
+    {
+        if (string.IsNullOrEmpty(tableName))
+        {
+            return null;
+        }
+
+        if (currentDepth > 5)
+        {
+            return null;
+        }
+
+        IEnumerable<GGPKTreeNode> searchNodes;
+        if (SelectedNode != null)
+        {
+            var root = SelectedNode;
+            while (root.Parent != null)
+            {
+                root = root.Parent;
+            }
+
+            searchNodes = [root];
+        }
+        else
+        {
+            searchNodes = GgpkNodes.Concat(BundleTreeItems);
+        }
+
+        var ggpkTreeNodes = searchNodes.ToList();
+        var node = FindNodeByName(ggpkTreeNodes, tableName + ".datc64") ??
+                   FindNodeByName(ggpkTreeNodes, tableName + ".dat");
+
+        if (node?.Value is GGPKFileInfo fib)
+        {
+            try
+            {
+                var data = await ggpkParsingService.LoadGGPKFileDataAsync(fib, CancellationToken.None);
+                return await ResolveForeignRowDataAsync(data, tableName, id, fib.FileName, currentDepth);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        if (node?.Value is BundleIndexInfo.FileRecord fileRecord)
+        {
+            try
+            {
+                // Find BundleIndexInfo from BundleTreeItems
+                var bundleIndexInfo = BundleTreeItems.FirstOrDefault()?.Value as BundleIndexInfo;
+                if (bundleIndexInfo == null)
+                {
+                    return null;
+                }
+
+                if (fileRecord.BundleIndex >= bundleIndexInfo.Bundles.Length)
+                {
+                    return null;
+                }
+
+                var bundleName = bundleIndexInfo.Bundles[fileRecord.BundleIndex].Name;
+                if (string.IsNullOrEmpty(bundleName))
+                {
+                    return null;
+                }
+
+                // Find the bundle file node in GGPK tree
+                // Usually bundle files in GGPK have .bundle.bin extension
+                var bundleNode = FindGgpkNode(bundleName + ".bundle.bin");
+
+                if (bundleNode?.Value is GGPKFileInfo bundleFileInfo)
+                {
+                    var data = await ggpkBundleService.LoadBundleFileDataAsync(bundleFileInfo, fileRecord,
+                        CancellationToken.None);
+                    return await ResolveForeignRowDataAsync(data, tableName, id, fileRecord.FileName, currentDepth);
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    private async Task<object?> ResolveForeignRowDataAsync(byte[] data, string tableName, long id, string fileName,
+        int currentDepth)
+    {
+        if (data.Length < 4)
+        {
+            return null;
+        }
+
+        var rowCount = BitConverter.ToInt32(data, 0);
+
+        long separatorIndex = -1;
+        var limit = data.Length - 8;
+        for (var i = 4; i <= limit; i++)
+        {
+            if (data[i] == 0xBB && data[i + 1] == 0xBB && data[i + 2] == 0xBB && data[i + 3] == 0xBB &&
+                data[i + 4] == 0xBB && data[i + 5] == 0xBB && data[i + 6] == 0xBB && data[i + 7] == 0xBB)
+            {
+                separatorIndex = i;
+                break;
+            }
+        }
+
+        var contentEnd = separatorIndex != -1 ? separatorIndex : data.Length;
+        var contentSize = contentEnd - 4;
+        var actualRowSize = rowCount > 0 ? (int)(contentSize / rowCount) : 0;
+
+        if (actualRowSize == 0 || id >= rowCount)
+        {
+            return null;
+        }
+
+        var isDatc64 = fileName.EndsWith(".datc64", StringComparison.OrdinalIgnoreCase);
+        var validVersions = isDatc64 ? new[] { 2, 3 } : new[] { 1, 3 };
+
+        var cols = schemaService.GetColumns(tableName, validVersions);
+        if (cols == null)
+        {
+            return null;
+        }
+
+        var is64Bit = isDatc64;
+
+        var rowStart = 4 + (int)id * actualRowSize;
+
+        var rowDict = new Dictionary<string, object?>();
+        var offset = 0;
+        foreach (var c in cols)
+        {
+            var size = GetColumnSize(c, is64Bit);
+            if (offset + size > actualRowSize)
+            {
+                break;
+            }
+
+            var val = ReadColumnValue(data, rowStart + offset, c, is64Bit, separatorIndex);
+
+            // Recursive Foreign Key Resolution (Limit 5)
+            if (c.Type == "foreignrow" && val != "null" && val.StartsWith("FK(") && currentDepth < 5)
+            {
+                var targetTable = c.References?.Table;
+                if (string.IsNullOrEmpty(targetTable))
+                {
+                    targetTable = c.Name;
+                }
+
+                var hexId = val.Substring(3, val.Length - 4);
+                if (!string.IsNullOrEmpty(targetTable) &&
+                    long.TryParse(hexId, NumberStyles.HexNumber, null, out var foreignId))
+                {
+                    try
+                    {
+                        var foreignData = await ResolveForeignRow(targetTable, foreignId, currentDepth + 1);
+                        rowDict[c.Name ?? "unk"] = foreignData ?? val;
+                    }
+                    catch
+                    {
+                        rowDict[c.Name ?? "unk"] = val;
+                    }
+                }
+                else
+                {
+                    rowDict[c.Name ?? "unk"] = val;
+                }
+            }
+            else
+            {
+                rowDict[c.Name ?? "unk"] = val;
+            }
+
+            offset += size;
+        }
+
+        return rowDict;
+    }
+
+    private GGPKTreeNode? FindNodeByName(IEnumerable<GGPKTreeNode> nodes, string name)
+    {
+        foreach (var node in nodes)
+        {
+            if (node.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+            {
+                return node;
+            }
+
+            if (node.Children.Count > 0)
+            {
+                var found = FindNodeByName(node.Children, name);
+                if (found != null)
+                {
+                    return found;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    public record DatRowInfo(
+        ObservableCollection<DatRow> Rows,
+        List<string> Headers,
+        List<double> ColumnWidths,
+        List<SchemaColumn>? Columns = null);
 
     [UsedImplicitly(ImplicitUseTargetFlags.WithMembers)]
     public record DatRow(int Index, string[] Values);

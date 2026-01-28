@@ -121,7 +121,24 @@ public partial class MainWindow : Window
                 Source = _listBox
             });
 
+            var copyJsonItem = new MenuItem { Header = "Copy JSON" };
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                copyJsonItem.Bind(MenuItem.CommandProperty, new Binding
+                {
+                    Path = "CopyDatRowJsonCommand",
+                    Source = viewModel
+                });
+            }
+
+            copyJsonItem.Bind(MenuItem.CommandParameterProperty, new Binding
+            {
+                Path = "SelectedItems",
+                Source = _listBox
+            });
+
             contextMenu.Items.Add(copyItem);
+            contextMenu.Items.Add(copyJsonItem);
             panel.ContextMenu = contextMenu;
 
             for (var i = 0; i < info.Headers.Count; i++)
