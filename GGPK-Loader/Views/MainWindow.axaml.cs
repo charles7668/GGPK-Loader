@@ -99,7 +99,30 @@ public partial class MainWindow : Window
 
         _listBox.ItemTemplate = new FuncDataTemplate<MainWindowViewModel.DatRow>((_, _) =>
         {
-            var panel = new StackPanel { Orientation = Orientation.Horizontal };
+            var panel = new StackPanel { Orientation = Orientation.Horizontal, Background = Brushes.Transparent };
+
+            var contextMenu = new ContextMenu();
+            var copyItem = new MenuItem { Header = "Copy" };
+
+            // Binding to window's datacontext
+            if (DataContext is MainWindowViewModel vm)
+            {
+                copyItem.Bind(MenuItem.CommandProperty, new Binding
+                {
+                    Path = "CopyDatRowCommand",
+                    Source = vm
+                });
+            }
+
+            // Binding the CommandParameter to the ListBox's SelectedItems
+            copyItem.Bind(MenuItem.CommandParameterProperty, new Binding
+            {
+                Path = "SelectedItems",
+                Source = _listBox
+            });
+
+            contextMenu.Items.Add(copyItem);
+            panel.ContextMenu = contextMenu;
 
             for (var i = 0; i < info.Headers.Count; i++)
             {
@@ -133,6 +156,7 @@ public partial class MainWindow : Window
 
                 // Sync Vertical Scroll -> IndexListBox
                 // We need to find the ScrollViewer inside IndexListBox
+                // We need to find the ScrollViewer inside IndexListBox
                 var indexScrollViewer = _indexListBox.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
                 if (indexScrollViewer != null)
                 {
@@ -140,6 +164,9 @@ public partial class MainWindow : Window
                 }
             }
         });
+
+        // Sync Selection
+        _indexListBox.Selection = _listBox.Selection;
     }
 
     private void OnNodePointerPressed(object? sender, PointerPressedEventArgs e)

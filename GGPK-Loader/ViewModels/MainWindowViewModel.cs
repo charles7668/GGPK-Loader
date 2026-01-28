@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
@@ -48,6 +49,9 @@ public partial class MainWindowViewModel(
     private string _currentDatFileName = "";
 
     [ObservableProperty]
+    private string _datFilterText = "";
+
+    [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsDatViewVisible))]
     [NotifyPropertyChangedFor(nameof(IsInfoTextVisible))]
     [NotifyPropertyChangedFor(nameof(IsDatViewVisible))]
@@ -80,6 +84,8 @@ public partial class MainWindowViewModel(
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsInfoTextVisible))]
     private string _nodeInfoText = "";
+
+    private List<DatRow>? _originalDatRows;
 
     [ObservableProperty]
     private string _searchText = "";
@@ -114,7 +120,62 @@ public partial class MainWindowViewModel(
 
     partial void OnDatViewBytesChanged(byte[]? value)
     {
-        DatInfoSource = value == null ? null : CreateDatRows(value);
+        DatFilterText = "";
+        if (value == null)
+        {
+            DatInfoSource = null;
+            return;
+        }
+
+        IsLoading = true;
+        Task.Run(async () =>
+        {
+            try
+            {
+                var info = CreateDatRows(value);
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    DatInfoSource = info;
+                    ApplyDatFilter();
+                });
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error creating dat rows: {ex}");
+                await Dispatcher.UIThread.InvokeAsync(async () =>
+                {
+                    await messageService.ShowErrorMessageAsync($"Failed to parse dat file: {ex.Message}");
+                    DatInfoSource = null;
+                });
+            }
+            finally
+            {
+                await Dispatcher.UIThread.InvokeAsync(() => IsLoading = false);
+            }
+        });
+    }
+
+    partial void OnDatFilterTextChanged(string value)
+    {
+        ApplyDatFilter();
+    }
+
+    private void ApplyDatFilter()
+    {
+        if (DatInfoSource == null || _originalDatRows == null)
+        {
+            return;
+        }
+
+        IEnumerable<DatRow> filtered = _originalDatRows;
+        if (!string.IsNullOrWhiteSpace(DatFilterText))
+        {
+            filtered = _originalDatRows.Where(r =>
+                r.Values.Any(v => v.Contains(DatFilterText, StringComparison.OrdinalIgnoreCase))
+            );
+        }
+
+        DatInfoSource = DatInfoSource with { Rows = new ObservableCollection<DatRow>(filtered) };
     }
 
     private DatRowInfo? CreateDatRows(byte[] data)
@@ -191,7 +252,7 @@ public partial class MainWindowViewModel(
                     columnWidths[columns.Count + i] = Math.Max(GetTextWidth("00"), GetTextWidth(h));
                 }
 
-                var items = new ObservableCollection<DatRow>();
+                var allRows = new List<DatRow>();
 
                 for (var r = 0; r < rowCount; r++)
                 {
@@ -243,7 +304,7 @@ public partial class MainWindowViewModel(
                         }
                     }
 
-                    items.Add(new DatRow(r, rowValues));
+                    allRows.Add(new DatRow(r, rowValues));
                 }
 
                 // Add padding to widths
@@ -252,13 +313,14 @@ public partial class MainWindowViewModel(
                     columnWidths[i] += 20;
                 }
 
-                // Add Row Index Column Width
-                // "Row" length is 3 or calculated from Max Index 
                 var maxIndexStr = (rowCount - 1).ToString();
                 var indexWidth = Math.Max(GetTextWidth("Row"), GetTextWidth(maxIndexStr)) + 20;
 
                 var finalWidths = new List<double> { indexWidth };
                 finalWidths.AddRange(columnWidths);
+
+                _originalDatRows = allRows;
+                var items = new ObservableCollection<DatRow>(allRows);
 
                 return new DatRowInfo(items, headers, finalWidths);
             }
@@ -280,7 +342,7 @@ public partial class MainWindowViewModel(
         var indexDigits = maxIndex > 255 ? (int)Math.Floor(Math.Log(maxIndex, 16)) + 1 : 2;
         var headerFormat = "X" + indexDigits;
 
-        var itemsFallback = new ObservableCollection<DatRow>();
+        var allRowsFallback = new List<DatRow>();
         var widthsFallback = new double[rowSize];
         var headersFallback = new List<string>();
 
@@ -314,7 +376,7 @@ public partial class MainWindowViewModel(
                 }
             }
 
-            itemsFallback.Add(new DatRow(r, rowValues));
+            allRowsFallback.Add(new DatRow(r, rowValues));
         }
 
         for (var i = 0; i < widthsFallback.Length; i++)
@@ -330,6 +392,8 @@ public partial class MainWindowViewModel(
         finalWidthsFallback.Add(indexWidthFallback);
         finalWidthsFallback.AddRange(widthsFallback);
 
+        _originalDatRows = allRowsFallback;
+        var itemsFallback = new ObservableCollection<DatRow>(allRowsFallback);
         return new DatRowInfo(itemsFallback, headersFallback, finalWidthsFallback);
     }
 
@@ -1458,6 +1522,62 @@ public partial class MainWindowViewModel(
             catch (Exception ex)
             {
                 await messageService.ShowErrorMessageAsync($"Failed to replace file: {ex.Message}");
+            }
+        }
+    }
+
+    [RelayCommand]
+    private async Task CopyDatRow(object? parameter)
+    {
+        if (parameter == null)
+        {
+            return;
+        }
+
+        var rows = new List<DatRow>();
+        if (parameter is DatRow singleRow)
+        {
+            rows.Add(singleRow);
+        }
+        else if (parameter is IEnumerable list)
+        {
+            foreach (var item in list)
+            {
+                if (item is DatRow r)
+                {
+                    rows.Add(r);
+                }
+            }
+        }
+
+        if (rows.Count == 0 || DatInfoSource == null)
+        {
+            return;
+        }
+
+        // Sort rows by index
+        rows.Sort((a, b) => a.Index.CompareTo(b.Index));
+
+        var sb = new StringBuilder();
+
+        // 1. Header (Index + Column Headers)
+        sb.Append("Index\t");
+        sb.AppendLine(string.Join("\t", DatInfoSource.Headers));
+
+        // 2. Rows (Index + Values)
+        foreach (var row in rows)
+        {
+            sb.Append(row.Index).Append('\t');
+            sb.AppendLine(string.Join("\t", row.Values));
+        }
+
+        var text = sb.ToString();
+
+        if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            if (desktop.MainWindow?.Clipboard is { } clipboard)
+            {
+                await clipboard.SetTextAsync(text);
             }
         }
     }
