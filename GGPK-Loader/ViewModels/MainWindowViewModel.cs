@@ -418,17 +418,45 @@ public partial class MainWindowViewModel(
 
                 return $"Ptr({sRel:X})";
             case "foreignrow":
+                if (IsAllFe(data, offset, is64Bit ? 8 : 4))
+                {
+                    return "null";
+                }
+
                 var key = is64Bit ? BitConverter.ToUInt64(data, offset) : BitConverter.ToUInt32(data, offset);
                 return $"FK({key:X})";
             case "row":
+                if (IsAllFe(data, offset, is64Bit ? 8 : 4))
+                {
+                    return "null";
+                }
+
                 var rKey = is64Bit ? BitConverter.ToUInt64(data, offset) : BitConverter.ToUInt32(data, offset);
                 return $"Row({rKey:X})";
             case "enumrow":
+                if (IsAllFe(data, offset, 4))
+                {
+                    return "null";
+                }
+
                 var eKey = BitConverter.ToInt32(data, offset);
                 return $"Enum({eKey:X})";
             default:
                 return "??";
         }
+    }
+
+    private static bool IsAllFe(byte[] data, int offset, int length)
+    {
+        for (var i = 0; i < length; i++)
+        {
+            if (data[offset + i] != 0xFE)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     partial void OnSelectedGgpkSearchResultChanged(GGPKTreeNode? value)
@@ -509,7 +537,6 @@ public partial class MainWindowViewModel(
                     SearchRecursive(BundleTreeItems[0], regex, BundleSearchResults);
                 }
             });
-
 
 
             if (GgpkSearchResults.Count == 0 && BundleSearchResults.Count == 0)
