@@ -418,7 +418,7 @@ public partial class MainWindowViewModel(
             return is64Bit ? 16 : 8;
         }
 
-        return col.Type switch
+        var size = col.Type switch
         {
             "bool" => 1,
             "i16" or "u16" => 2,
@@ -431,6 +431,8 @@ public partial class MainWindowViewModel(
             "rid" => is64Bit ? 16 : 4,
             _ => 1
         };
+
+        return col.Interval ? size * 2 : size;
     }
 
     private static string ReadColumnValue(byte[] data, int offset, SchemaColumn col, bool is64Bit, long baseOffset)
@@ -445,57 +447,70 @@ public partial class MainWindowViewModel(
         {
             var count = is64Bit ? BitConverter.ToInt64(data, offset) : BitConverter.ToInt32(data, offset);
             var relOffset = is64Bit ? BitConverter.ToInt64(data, offset + 8) : BitConverter.ToInt32(data, offset + 4);
-
-            if (count < 0 || count > 10000)
-            {
-                return $"[{count}] (Invalid Count)"; // Sanity check
-            }
+            
+            if (count < 0 || count > 10000) return $"[{count}] (Invalid Count)"; // Sanity check
 
             var ptr = baseOffset + relOffset;
-
+            
             // Create a fake column for the element logic
-            var elemCol = new SchemaColumn
-            {
-                Name = col.Name,
+            var elemCol = new SchemaColumn 
+            { 
+                Name = col.Name, 
                 Description = col.Description,
                 Array = false,
                 Type = col.Type,
                 Unique = col.Unique,
-                References = col.References
+                References = col.References,
+                Interval = col.Interval
             };
             var elemSize = GetColumnSize(elemCol, is64Bit);
-
+            
             var sb = new StringBuilder();
             sb.Append("[");
-
+            
             for (var i = 0; i < count; i++)
             {
-                if (i > 0)
-                {
-                    sb.Append(", ");
-                }
+               if (i > 0) sb.Append(", ");
+               
+               if (baseOffset < 0 || ptr < 0 || ptr + i * elemSize + elemSize > data.Length)
+               {
+                   sb.Append("ERR");
+                   break;
+               }
 
-                if (baseOffset < 0 || ptr < 0 || ptr + i * elemSize + elemSize > data.Length)
-                {
-                    sb.Append("ERR");
-                    break;
-                }
-
-                var elemOffset = (int)(ptr + i * elemSize);
-
-                // Recursive call for element
-                var val = ReadColumnValue(data, elemOffset, elemCol, is64Bit, baseOffset);
-                sb.Append(val);
-
-                if (i >= 50)
-                {
-                    sb.Append($", ... {count - i - 1} more");
-                    break;
-                }
+               var elemOffset = (int)(ptr + i * elemSize);
+               
+               // Recursive call for element
+               var val = ReadColumnValue(data, elemOffset, elemCol, is64Bit, baseOffset);
+               sb.Append(val);
+               
+               if (i >= 50) 
+               {
+                   sb.Append($", ... {count - i - 1} more");
+                   break;
+               }
             }
-
             sb.Append("]");
-            return sb.ToString();
+            return sb.ToString(); 
+        }
+
+        if (col.Interval)
+        {
+            var subCol = new SchemaColumn 
+            { 
+                Name = col.Name, 
+                Type = col.Type, 
+                Interval = false, 
+                References = col.References,
+                Array = false
+            };
+            var subSize = GetColumnSize(subCol, is64Bit);
+            
+            if (offset + subSize * 2 > data.Length) return "ERR_INTV";
+
+            var v1 = ReadColumnValue(data, offset, subCol, is64Bit, baseOffset);
+            var v2 = ReadColumnValue(data, offset + subSize, subCol, is64Bit, baseOffset);
+            return $"({v1}, {v2})";
         }
 
         switch (col.Type)

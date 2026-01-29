@@ -50,6 +50,9 @@ public class SchemaColumn
 
     [JsonPropertyName("references")]
     public SchemaReferences? References { get; set; }
+
+    [JsonPropertyName("interval")]
+    public bool Interval { get; set; }
 }
 
 [UsedImplicitly(ImplicitUseTargetFlags.Members)]
