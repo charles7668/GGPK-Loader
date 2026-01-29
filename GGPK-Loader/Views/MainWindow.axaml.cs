@@ -139,6 +139,22 @@ public partial class MainWindow : Window
 
             contextMenu.Items.Add(copyItem);
             contextMenu.Items.Add(copyJsonItem);
+            
+            var copyBinaryItem = new MenuItem { Header = "Copy Binary" };
+            if (DataContext is MainWindowViewModel vmBinary)
+            {
+                copyBinaryItem.Bind(MenuItem.CommandProperty, new Binding
+                {
+                    Path = "CopyDatRowBinaryCommand",
+                    Source = vmBinary
+                });
+            }
+            copyBinaryItem.Bind(MenuItem.CommandParameterProperty, new Binding
+            {
+                Path = "SelectedItems",
+                Source = _listBox
+            });
+            contextMenu.Items.Add(copyBinaryItem);
             panel.ContextMenu = contextMenu;
 
             for (var i = 0; i < info.Headers.Count; i++)

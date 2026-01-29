@@ -1813,6 +1813,93 @@ public partial class MainWindowViewModel(
         }
     }
 
+    [RelayCommand]
+    private async Task CopyDatRowBinary(object? parameter)
+    {
+        if (parameter == null || DatViewBytes == null || DatViewBytes.Length < 4)
+        {
+            return;
+        }
+
+        var rows = new List<DatRow>();
+        if (parameter is DatRow singleRow)
+        {
+            rows.Add(singleRow);
+        }
+        else if (parameter is IEnumerable list)
+        {
+            var items = list.Cast<object>().ToList();
+            foreach (var item in items)
+            {
+                if (item is DatRow r)
+                {
+                    rows.Add(r);
+                }
+            }
+        }
+
+        if (rows.Count == 0)
+        {
+            return;
+        }
+
+        if (rows.Count > 1)
+        {
+            rows.Sort((a, b) => a.Index.CompareTo(b.Index));
+        }
+
+        // Calculate Row Size
+        var data = DatViewBytes;
+        var rowCount = BitConverter.ToInt32(data, 0);
+        long separatorIndex = -1;
+        var limit = data.Length - 8;
+        for (var i = 4; i <= limit; i++)
+        {
+            if (data[i] == 0xBB && data[i + 1] == 0xBB && data[i + 2] == 0xBB && data[i + 3] == 0xBB &&
+                data[i + 4] == 0xBB && data[i + 5] == 0xBB && data[i + 6] == 0xBB && data[i + 7] == 0xBB)
+            {
+                separatorIndex = i;
+                break;
+            }
+        }
+
+        var contentEnd = separatorIndex != -1 ? separatorIndex : data.Length;
+        var contentSize = contentEnd - 4;
+        var actualRowSize = rowCount > 0 ? (int)(contentSize / rowCount) : 0;
+
+        if (actualRowSize <= 0)
+        {
+            return;
+        }
+
+        var sb = new StringBuilder();
+        foreach (var row in rows)
+        {
+            var start = 4 + row.Index * actualRowSize;
+            if (start + actualRowSize > data.Length)
+            {
+                continue;
+            }
+
+            if (sb.Length > 0)
+            {
+                sb.AppendLine();
+            }
+
+            var rowBytes = new byte[actualRowSize];
+            Array.Copy(data, start, rowBytes, 0, actualRowSize);
+            sb.Append(BitConverter.ToString(rowBytes).Replace("-", " "));
+        }
+
+        if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            if (desktop.MainWindow?.Clipboard is { } clipboard)
+            {
+                await clipboard.SetTextAsync(sb.ToString());
+            }
+        }
+    }
+
     private async Task<object?> ResolveForeignRow(string? tableName, long id, int currentDepth = 0)
     {
         if (string.IsNullOrEmpty(tableName))
