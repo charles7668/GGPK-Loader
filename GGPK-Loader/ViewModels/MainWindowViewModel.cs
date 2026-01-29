@@ -444,7 +444,51 @@ public partial class MainWindowViewModel(
         if (col.Array)
         {
             var count = is64Bit ? BitConverter.ToInt64(data, offset) : BitConverter.ToInt32(data, offset);
-            return $"[{count}]";
+            var relOffset = is64Bit ? BitConverter.ToInt64(data, offset + 8) : BitConverter.ToInt32(data, offset + 4);
+            
+            if (count < 0 || count > 10000) return $"[{count}] (Invalid Count)"; // Sanity check
+
+            var ptr = baseOffset + relOffset;
+            
+            // Create a fake column for the element logic
+            var elemCol = new SchemaColumn 
+            { 
+                Name = col.Name, 
+                Description = col.Description,
+                Array = false,
+                Type = col.Type,
+                Unique = col.Unique,
+                References = col.References 
+            };
+            var elemSize = GetColumnSize(elemCol, is64Bit);
+            
+            var sb = new StringBuilder();
+            sb.Append("[");
+            
+            for (var i = 0; i < count; i++)
+            {
+               if (i > 0) sb.Append(", ");
+               
+               if (baseOffset < 0 || ptr < 0 || ptr + i * elemSize + elemSize > data.Length)
+               {
+                   sb.Append("ERR");
+                   break;
+               }
+
+               var elemOffset = (int)(ptr + i * elemSize);
+               
+               // Recursive call for element
+               var val = ReadColumnValue(data, elemOffset, elemCol, is64Bit, baseOffset);
+               sb.Append(val);
+               
+               if (i >= 50) 
+               {
+                   sb.Append($", ... {count - i - 1} more");
+                   break;
+               }
+            }
+            sb.Append("]");
+            return sb.ToString(); 
         }
 
         switch (col.Type)
