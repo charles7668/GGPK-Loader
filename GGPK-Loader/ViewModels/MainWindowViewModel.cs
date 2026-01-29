@@ -1692,7 +1692,7 @@ public partial class MainWindowViewModel(
                         var colName = col.Name ?? $"Col{i}";
 
                         // Check if it's a Foreign Row that we want to resolve
-                        if (col.Type == "foreignrow" && valStr != "null" && valStr.StartsWith("FK("))
+                        if (col.Type == "foreignrow")
                         {
                             var targetTable = col.References?.Table;
                             if (string.IsNullOrEmpty(targetTable))
@@ -1700,22 +1700,76 @@ public partial class MainWindowViewModel(
                                 targetTable = col.Name;
                             }
 
-                            var hexId = valStr.Substring(3, valStr.Length - 4);
-                            if (!string.IsNullOrEmpty(targetTable) &&
-                                long.TryParse(hexId, NumberStyles.HexNumber, null, out var id))
+                            if (col.Array && valStr.StartsWith("[") && valStr.EndsWith("]"))
                             {
-                                try
+                                // Handle Array of Foreign Keys
+                                var innerContent = valStr.Substring(1, valStr.Length - 2);
+                                if (string.IsNullOrWhiteSpace(innerContent))
                                 {
-                                    var foreignData = await ResolveForeignRow(targetTable, id);
-                                    rowObj[colName] = foreignData ?? valStr;
+                                    rowObj[colName] = new List<object>();
                                 }
-                                catch
+                                else
+                                {
+                                    var splits = innerContent.Split(new[] { ", " }, StringSplitOptions.RemoveEmptyEntries);
+                                    var resolvedList = new List<object?>();
+                                    
+                                    foreach (var item in splits)
+                                    {
+                                        var cleanItem = item.Trim();
+                                        if (cleanItem.StartsWith("FK("))
+                                        {
+                                            var hexId = cleanItem.Substring(3, cleanItem.Length - 4);
+                                            if (!string.IsNullOrEmpty(targetTable) && long.TryParse(hexId, NumberStyles.HexNumber, null, out var id))
+                                            {
+                                                try 
+                                                {
+                                                    // Resolve recursively
+                                                    var foreignData = await ResolveForeignRow(targetTable, id);
+                                                    resolvedList.Add(foreignData ?? cleanItem);
+                                                }
+                                                catch
+                                                {
+                                                    resolvedList.Add(cleanItem);
+                                                }
+                                            }
+                                            else
+                                            {
+                                                resolvedList.Add(cleanItem);
+                                            }
+                                        }
+                                        else 
+                                        {
+                                            resolvedList.Add(cleanItem);
+                                        }
+                                    }
+                                    rowObj[colName] = resolvedList;
+                                }
+                            }
+                            else if (!col.Array && valStr != "null" && valStr.StartsWith("FK("))
+                            {
+                                // Handle Single Foreign Key
+                                var hexId = valStr.Substring(3, valStr.Length - 4);
+                                if (!string.IsNullOrEmpty(targetTable) &&
+                                    long.TryParse(hexId, NumberStyles.HexNumber, null, out var id))
+                                {
+                                    try
+                                    {
+                                        var foreignData = await ResolveForeignRow(targetTable, id);
+                                        rowObj[colName] = foreignData ?? valStr;
+                                    }
+                                    catch
+                                    {
+                                        rowObj[colName] = valStr;
+                                    }
+                                }
+                                else
                                 {
                                     rowObj[colName] = valStr;
                                 }
                             }
                             else
                             {
+                                // null or unknown format
                                 rowObj[colName] = valStr;
                             }
                         }
