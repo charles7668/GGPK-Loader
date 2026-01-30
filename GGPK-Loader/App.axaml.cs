@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Data.Core.Plugins;
 using Avalonia.Markup.Xaml;
@@ -26,6 +27,7 @@ public class App : Application
             // Avoid duplicate validations from both Avalonia and the CommunityToolkit. 
             // More info: https://docs.avaloniaui.net/docs/guides/development-guides/data-validation#manage-validationplugins
             DisableAvaloniaDataAnnotationValidation();
+
             var collection = new ServiceCollection();
             collection.AddSingleton<MainWindow>();
             collection.AddSingleton<IFileService>(sp => new FileService(sp.GetRequiredService<MainWindow>()));
@@ -34,6 +36,7 @@ public class App : Application
             collection.AddSingleton<IGgpkParsingService, GgpkParsingService>();
             collection.AddSingleton<IGgpkBundleService, GgpkBundleService>();
             collection.AddSingleton<ISchemaService, SchemaService>();
+            collection.AddSingleton<ITextureService, TextureService>();
             collection.AddSingleton<MainWindowViewModel>();
 
             var services = collection.BuildServiceProvider();

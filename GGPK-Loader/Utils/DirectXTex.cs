@@ -214,7 +214,29 @@ public static class DirectXTex
         }
     }
 
+    public static int GetMetadataFromDDSMemory(ReadOnlySpan<byte> data, uint flags, out TexMetadata metadata)
+    {
+        unsafe
+        {
+            fixed (byte* ptr = data)
+            {
+                return GetMetadataFromDDSMemory((IntPtr)ptr, (UIntPtr)data.Length, flags, out metadata);
+            }
+        }
+    }
+
     public static int LoadFromDDSMemory(byte[] data, uint flags, ref TexMetadata metadata, ref ScratchImage image)
+    {
+        unsafe
+        {
+            fixed (byte* ptr = data)
+            {
+                return LoadFromDDSMemory((IntPtr)ptr, (UIntPtr)data.Length, flags, ref metadata, ref image);
+            }
+        }
+    }
+
+    public static int LoadFromDDSMemory(ReadOnlySpan<byte> data, uint flags, ref TexMetadata metadata, ref ScratchImage image)
     {
         unsafe
         {
