@@ -67,9 +67,14 @@ public partial class MainWindowViewModel(
     private bool _hasGgpkSearchResults;
 
     [ObservableProperty]
+    private bool _isContentLoading;
+
+    [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(DownloadTreeStructureCommand))]
     [NotifyCanExecuteChangedFor(nameof(OpenGgpkFileCommand))]
     private bool _isLoading;
+
+    private int _loadingCount;
 
     private CancellationTokenSource? _loadingFileCts;
     private Task _loadingFileTask = Task.CompletedTask;
@@ -124,6 +129,7 @@ public partial class MainWindowViewModel(
         }
 
         IsLoading = true;
+        IncrementLoading();
         Task.Run(async () =>
         {
             try
@@ -146,7 +152,11 @@ public partial class MainWindowViewModel(
             }
             finally
             {
-                await Dispatcher.UIThread.InvokeAsync(() => IsLoading = false);
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    IsLoading = false;
+                    DecrementLoading();
+                });
             }
         });
     }
@@ -300,6 +310,22 @@ public partial class MainWindowViewModel(
         }
     }
 
+    private void IncrementLoading()
+    {
+        if (Interlocked.Increment(ref _loadingCount) > 0)
+        {
+            Dispatcher.UIThread.Post(() => IsContentLoading = true);
+        }
+    }
+
+    private void DecrementLoading()
+    {
+        if (Interlocked.Decrement(ref _loadingCount) <= 0)
+        {
+            Dispatcher.UIThread.Post(() => IsContentLoading = false);
+        }
+    }
+
     partial void OnSelectedBundleInfoNodeChanged(GGPKTreeNode? value)
     {
         if (IsLoading)
@@ -325,8 +351,10 @@ public partial class MainWindowViewModel(
         if (foundNode?.Value is GGPKFileInfo ggpkFileInfo)
         {
             var (oldCts, token) = ResetCancellationSource();
+            IncrementLoading();
             _loadingFileTask =
-                ChainBundleFileLoadingTask(_loadingFileTask, oldCts, token, ggpkFileInfo, fileRecord);
+                ChainBundleFileLoadingTask(_loadingFileTask, oldCts, token, ggpkFileInfo, fileRecord)
+                    .ContinueWith(_ => DecrementLoading(), TaskScheduler.Default);
         }
     }
 
@@ -376,27 +404,37 @@ public partial class MainWindowViewModel(
         DatViewBytes = null;
         var fileInfo = nodeValue!;
         NodeInfoText = fileInfo.FileName;
+
+        IncrementLoading();
+
         if (IsImageFile(fileInfo.FileName))
         {
-            _loadingFileTask = ChainImageLoadingTask(_loadingFileTask, oldCts, token, fileInfo);
+            _loadingFileTask = ChainImageLoadingTask(_loadingFileTask, oldCts, token, fileInfo)
+                .ContinueWith(_ => DecrementLoading(), TaskScheduler.Default);
             return;
         }
 
         if (IsTextFile(fileInfo.FileName))
         {
-            _loadingFileTask = ChainTextLoadingTask(_loadingFileTask, oldCts, token, fileInfo);
+            _loadingFileTask = ChainTextLoadingTask(_loadingFileTask, oldCts, token, fileInfo)
+                .ContinueWith(_ => DecrementLoading(), TaskScheduler.Default);
             return;
         }
 
         if (IsDatFile(fileInfo.FileName))
         {
-            _loadingFileTask = ChainDatLoadingTask(_loadingFileTask, oldCts, token, fileInfo);
+            _loadingFileTask = ChainDatLoadingTask(_loadingFileTask, oldCts, token, fileInfo)
+                .ContinueWith(_ => DecrementLoading(), TaskScheduler.Default);
             return;
         }
 
         _loadingFileTask = ChainFileInformationLoadingTask(_loadingFileTask, oldCts, token, fileInfo);
         // Cleanup if not starting a new task
-        _loadingFileTask = _loadingFileTask.ContinueWith(_ => oldCts?.Dispose(), TaskScheduler.Default);
+        _loadingFileTask = _loadingFileTask.ContinueWith(_ =>
+        {
+            oldCts?.Dispose();
+            DecrementLoading();
+        }, TaskScheduler.Default);
     }
 
     private (CancellationTokenSource? oldCts, CancellationToken token) ResetCancellationSource()
@@ -592,7 +630,8 @@ public partial class MainWindowViewModel(
 
     private bool IsDdsHeaderFile(string fileName)
     {
-        return textureService?.IsDdsHeaderFile(fileName) ?? fileName.EndsWith(".dds.header", StringComparison.OrdinalIgnoreCase);
+        return textureService?.IsDdsHeaderFile(fileName) ??
+               fileName.EndsWith(".dds.header", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsDatFile(string fileName)

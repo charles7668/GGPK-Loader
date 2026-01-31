@@ -191,6 +191,14 @@
                 </Grid>
                 <Image Source="{Binding SelectedImage}" HorizontalAlignment="Center" VerticalAlignment="Center"
                        IsVisible="{Binding SelectedImage, Converter={x:Static ObjectConverters.IsNotNull}}" />
+
+                <!-- Loading Overlay -->
+                <Grid Background="#80000000" IsVisible="{Binding IsContentLoading}">
+                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="10">
+                        <ProgressBar IsIndeterminate="True" />
+                        <TextBlock Text="Loading..." HorizontalAlignment="Center" />
+                    </StackPanel>
+                </Grid>
             </Panel>
         </Grid>
     </Grid>
