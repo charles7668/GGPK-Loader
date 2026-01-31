@@ -6,7 +6,6 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -14,16 +13,12 @@ using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
-using Avalonia.Media;
 using Avalonia.Media.Imaging;
-using Avalonia.Platform;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using GGPK_Loader.Models;
-using GGPK_Loader.Models.Schema;
 using GGPK_Loader.Services;
-using GGPK_Loader.Utils;
 using JetBrains.Annotations;
 
 namespace GGPK_Loader.ViewModels;
@@ -35,15 +30,14 @@ public partial class MainWindowViewModel(
     IGgpkParsingService ggpkParsingService,
     IGgpkBundleService ggpkBundleService,
     ISchemaService schemaService,
-    ITextureService textureService) : ViewModelBase
+    ITextureService textureService,
+    IDatParsingService datParsingService) : ViewModelBase
 {
     // For Design Time Preview
-    public MainWindowViewModel() : this(null!, null!, null!, null!, null!, null!)
+    public MainWindowViewModel() : this(null!, null!, null!, null!, null!, null!, null!)
     {
         // Design-time constructor
     }
-
-    private static readonly Typeface TypeFace = new("Consolas");
 
     [ObservableProperty]
     private string _buttonText = "Open";
@@ -134,7 +128,7 @@ public partial class MainWindowViewModel(
         {
             try
             {
-                var info = CreateDatRows(value);
+                var info = datParsingService.ParseDatFile(value, _currentDatFileName);
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
                     DatInfoSource = info;
@@ -178,417 +172,6 @@ public partial class MainWindowViewModel(
         }
 
         DatInfoSource = DatInfoSource with { Rows = new ObservableCollection<DatRow>(filtered) };
-    }
-
-    private DatRowInfo? CreateDatRows(byte[] data)
-    {
-        if (data.Length < 4)
-        {
-            return null;
-        }
-
-        var rowCount = BitConverter.ToInt32(data, 0);
-
-        // Check actual row size first to validate schema
-        long separatorIndex = -1;
-        // Search for 0xBBBBBBBBBBBBBBBB
-        var limit = data.Length - 8;
-        for (var i = 4; i <= limit; i++)
-        {
-            if (data[i] == 0xBB && data[i + 1] == 0xBB && data[i + 2] == 0xBB && data[i + 3] == 0xBB &&
-                data[i + 4] == 0xBB && data[i + 5] == 0xBB && data[i + 6] == 0xBB && data[i + 7] == 0xBB)
-            {
-                separatorIndex = i;
-                break;
-            }
-        }
-
-        var contentEnd = separatorIndex != -1 ? separatorIndex : data.Length;
-        var contentSize = contentEnd - 4;
-        var actualRowSize = rowCount > 0 ? (int)(contentSize / rowCount) : 0;
-
-        // Try to load schema
-        var tableName = Path.GetFileNameWithoutExtension(_currentDatFileName);
-        int[]? validVersions = null;
-        if (_currentDatFileName.EndsWith(".datc64", StringComparison.OrdinalIgnoreCase))
-        {
-            validVersions = new[] { 2, 3 };
-        }
-        else
-        {
-            validVersions = new[] { 1, 3 };
-        }
-
-        var columns = schemaService.GetColumns(tableName, validVersions);
-
-        if (columns != null)
-        {
-            var is64Bit = _currentDatFileName.EndsWith("64", StringComparison.OrdinalIgnoreCase);
-            var calculatedRowSize = 0;
-            foreach (var col in columns)
-            {
-                calculatedRowSize += GetColumnSize(col, is64Bit);
-            }
-
-            if (calculatedRowSize > 0)
-            {
-                var effectiveRowSize = actualRowSize > 0 ? actualRowSize : calculatedRowSize;
-                var extraBytes = Math.Max(0, effectiveRowSize - calculatedRowSize);
-
-                var totalColumns = columns.Count + extraBytes;
-                var headers = new List<string>(totalColumns);
-                var columnWidths = new double[totalColumns];
-
-                // Schema Headers
-                for (var i = 0; i < columns.Count; i++)
-                {
-                    headers.Add(columns[i].Name ?? "Unk");
-                    columnWidths[i] = GetTextWidth(headers[i]);
-                }
-
-                // Extra Byte Headers
-                for (var i = 0; i < extraBytes; i++)
-                {
-                    var h = i.ToString("X2");
-                    headers.Add(h);
-                    columnWidths[columns.Count + i] = Math.Max(GetTextWidth("00"), GetTextWidth(h));
-                }
-
-                var allRows = new List<DatRow>();
-
-                for (var r = 0; r < rowCount; r++)
-                {
-                    var rowStart = 4 + r * effectiveRowSize;
-                    if (rowStart + effectiveRowSize > data.Length)
-                    {
-                        break;
-                    }
-
-                    var rowValues = new string[totalColumns];
-                    var offset = 0;
-
-                    // Read Schema Columns
-                    for (var c = 0; c < columns.Count; c++)
-                    {
-                        var col = columns[c];
-                        var size = GetColumnSize(col, is64Bit);
-                        var val = ReadColumnValue(data, rowStart + offset, col, is64Bit, separatorIndex);
-                        rowValues[c] = val;
-
-                        var w = GetTextWidth(val);
-                        if (w > columnWidths[c])
-                        {
-                            columnWidths[c] = w;
-                        }
-
-                        offset += size;
-                    }
-
-                    // Read Extra Bytes
-                    for (var i = 0; i < extraBytes; i++)
-                    {
-                        var colIdx = columns.Count + i;
-                        if (rowStart + offset + i < data.Length)
-                        {
-                            var b = data[rowStart + offset + i];
-                            var val = b.ToString("X2");
-                            rowValues[colIdx] = val;
-
-                            var w = GetTextWidth(val);
-                            if (w > columnWidths[colIdx])
-                            {
-                                columnWidths[colIdx] = w;
-                            }
-                        }
-                        else
-                        {
-                            rowValues[colIdx] = "??";
-                        }
-                    }
-
-                    allRows.Add(new DatRow(r, rowValues));
-                }
-
-                // Add padding to widths
-                for (var i = 0; i < columnWidths.Length; i++)
-                {
-                    columnWidths[i] += 20;
-                }
-
-                var maxIndexStr = (rowCount - 1).ToString();
-                var indexWidth = Math.Max(GetTextWidth("Row"), GetTextWidth(maxIndexStr)) + 20;
-
-                var finalWidths = new List<double> { indexWidth };
-                finalWidths.AddRange(columnWidths);
-
-                _originalDatRows = allRows;
-                var items = new ObservableCollection<DatRow>(allRows);
-
-                return new DatRowInfo(items, headers, finalWidths, columns);
-            }
-        }
-
-        // Fallback to heuristic
-        if (rowCount <= 0)
-        {
-            return null;
-        }
-
-        var rowSize = (int)(contentSize / rowCount);
-        if (rowSize == 0)
-        {
-            return null;
-        }
-
-        var maxIndex = rowSize - 1;
-        var indexDigits = maxIndex > 255 ? (int)Math.Floor(Math.Log(maxIndex, 16)) + 1 : 2;
-        var headerFormat = "X" + indexDigits;
-
-        var allRowsFallback = new List<DatRow>();
-        var widthsFallback = new double[rowSize];
-        var headersFallback = new List<string>();
-
-        for (var i = 0; i < rowSize; i++)
-        {
-            var h = i.ToString(headerFormat);
-            headersFallback.Add(h);
-            widthsFallback[i] = GetTextWidth(h);
-        }
-
-        for (var r = 0; r < rowCount; r++)
-        {
-            var rowStart = 4 + r * rowSize;
-            var rowValues = new string[rowSize];
-
-            for (var c = 0; c < rowSize; c++)
-            {
-                if (rowStart + c < data.Length)
-                {
-                    rowValues[c] = data[rowStart + c].ToString("X2");
-                }
-                else
-                {
-                    rowValues[c] = "??";
-                }
-
-                var w = GetTextWidth(rowValues[c]);
-                if (w > widthsFallback[c])
-                {
-                    widthsFallback[c] = w;
-                }
-            }
-
-            allRowsFallback.Add(new DatRow(r, rowValues));
-        }
-
-        for (var i = 0; i < widthsFallback.Length; i++)
-        {
-            widthsFallback[i] += 20;
-        }
-
-        // Add Row Index Column Width Fallback
-        var maxIndexStrFallback = (rowCount - 1).ToString();
-        var indexWidthFallback = Math.Max(GetTextWidth("Row"), GetTextWidth(maxIndexStrFallback)) + 20;
-
-        var finalWidthsFallback = new List<double>();
-        finalWidthsFallback.Add(indexWidthFallback);
-        finalWidthsFallback.AddRange(widthsFallback);
-
-        _originalDatRows = allRowsFallback;
-        var itemsFallback = new ObservableCollection<DatRow>(allRowsFallback);
-        return new DatRowInfo(itemsFallback, headersFallback, finalWidthsFallback);
-    }
-
-    private static double GetTextWidth(string text)
-    {
-        var ft = new FormattedText(
-            text,
-            CultureInfo.CurrentCulture,
-            FlowDirection.LeftToRight,
-            TypeFace,
-            14,
-            null
-        );
-        return ft.WidthIncludingTrailingWhitespace;
-    }
-
-    private static int GetColumnSize(SchemaColumn col, bool is64Bit)
-    {
-        if (col.Array)
-        {
-            return is64Bit ? 16 : 8;
-        }
-
-        var size = col.Type switch
-        {
-            "bool" => 1,
-            "i16" or "u16" => 2,
-            "i32" or "u32" or "f32" => 4,
-            "i64" or "u64" => 8,
-            "string" => is64Bit ? 8 : 4,
-            "foreignrow" => is64Bit ? 16 : 4,
-            "row" => is64Bit ? 8 : 4,
-            "enumrow" => 4,
-            "rid" => is64Bit ? 16 : 4,
-            _ => 1
-        };
-
-        return col.Interval ? size * 2 : size;
-    }
-
-    private static string ReadColumnValue(byte[] data, int offset, SchemaColumn col, bool is64Bit, long baseOffset)
-    {
-        var size = GetColumnSize(col, is64Bit);
-        if (offset + size > data.Length)
-        {
-            return "ERR";
-        }
-
-        if (col.Array)
-        {
-            var count = is64Bit ? BitConverter.ToInt64(data, offset) : BitConverter.ToInt32(data, offset);
-            var relOffset = is64Bit ? BitConverter.ToInt64(data, offset + 8) : BitConverter.ToInt32(data, offset + 4);
-            
-            if (count < 0 || count > 10000) return $"[{count}] (Invalid Count)"; // Sanity check
-
-            var ptr = baseOffset + relOffset;
-            
-            // Create a fake column for the element logic
-            var elemCol = new SchemaColumn 
-            { 
-                Name = col.Name, 
-                Description = col.Description,
-                Array = false,
-                Type = col.Type,
-                Unique = col.Unique,
-                References = col.References,
-                Interval = col.Interval
-            };
-            var elemSize = GetColumnSize(elemCol, is64Bit);
-            
-            var sb = new StringBuilder();
-            sb.Append("[");
-            
-            for (var i = 0; i < count; i++)
-            {
-               if (i > 0) sb.Append(", ");
-               
-               if (baseOffset < 0 || ptr < 0 || ptr + i * elemSize + elemSize > data.Length)
-               {
-                   sb.Append("ERR");
-                   break;
-               }
-
-               var elemOffset = (int)(ptr + i * elemSize);
-               
-               // Recursive call for element
-               var val = ReadColumnValue(data, elemOffset, elemCol, is64Bit, baseOffset);
-               sb.Append(val);
-               
-               if (i >= 50) 
-               {
-                   sb.Append($", ... {count - i - 1} more");
-                   break;
-               }
-            }
-            sb.Append("]");
-            return sb.ToString(); 
-        }
-
-        if (col.Interval)
-        {
-            var subCol = new SchemaColumn 
-            { 
-                Name = col.Name, 
-                Type = col.Type, 
-                Interval = false, 
-                References = col.References,
-                Array = false
-            };
-            var subSize = GetColumnSize(subCol, is64Bit);
-            
-            if (offset + subSize * 2 > data.Length) return "ERR_INTV";
-
-            var v1 = ReadColumnValue(data, offset, subCol, is64Bit, baseOffset);
-            var v2 = ReadColumnValue(data, offset + subSize, subCol, is64Bit, baseOffset);
-            return $"({v1}, {v2})";
-        }
-
-        switch (col.Type)
-        {
-            case "bool":
-                return data[offset] != 0 ? "True" : "False";
-            case "i16": return BitConverter.ToInt16(data, offset).ToString();
-            case "i32": return BitConverter.ToInt32(data, offset).ToString();
-            case "i64": return BitConverter.ToInt64(data, offset).ToString();
-            case "u16": return BitConverter.ToUInt16(data, offset).ToString();
-            case "u32": return BitConverter.ToUInt32(data, offset).ToString();
-            case "u64": return BitConverter.ToUInt64(data, offset).ToString();
-            case "f32": return BitConverter.ToSingle(data, offset).ToString("F2");
-            case "f64": return BitConverter.ToDouble(data, offset).ToString("F2");
-            case "string":
-                var sRel = is64Bit ? BitConverter.ToInt64(data, offset) : BitConverter.ToUInt32(data, offset);
-                var sPtr = baseOffset + sRel;
-
-                // If baseOffset is invalid (-1) or result is out of bounds
-                if (baseOffset >= 0 && sPtr >= 0 && sPtr < data.Length)
-                {
-                    var start = (int)sPtr;
-                    var len = 0;
-                    while (start + len + 1 < data.Length)
-                    {
-                        if (data[start + len] == 0 && data[start + len + 1] == 0)
-                        {
-                            break;
-                        }
-
-                        len += 2;
-                    }
-
-                    return Encoding.Unicode.GetString(data, start, len);
-                }
-
-                return $"Ptr({sRel:X})";
-            case "foreignrow":
-                if (IsAllFe(data, offset, is64Bit ? 8 : 4))
-                {
-                    return "null";
-                }
-
-                var key = is64Bit ? BitConverter.ToUInt64(data, offset) : BitConverter.ToUInt32(data, offset);
-                return $"FK({key:X})";
-            case "row":
-                if (IsAllFe(data, offset, is64Bit ? 8 : 4))
-                {
-                    return "null";
-                }
-
-                var rKey = is64Bit ? BitConverter.ToUInt64(data, offset) : BitConverter.ToUInt32(data, offset);
-                return $"Row({rKey:X})";
-            case "enumrow":
-                if (IsAllFe(data, offset, 4))
-                {
-                    return "null";
-                }
-
-                var eKey = BitConverter.ToInt32(data, offset);
-                return $"Enum({eKey:X})";
-            default:
-                return "??";
-        }
-    }
-
-    private static bool IsAllFe(byte[] data, int offset, int length)
-    {
-        for (var i = 0; i < length; i++)
-        {
-            if (data[offset + i] != 0xFE)
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     partial void OnSelectedGgpkSearchResultChanged(GGPKTreeNode? value)
@@ -880,8 +463,6 @@ public partial class MainWindowViewModel(
             SelectedImage = image;
         });
     }
-
-
 
     private async Task<Bitmap?> ResolveDdsDataAsync(byte[] data)
     {
@@ -1924,13 +1505,13 @@ public partial class MainWindowViewModel(
         var offset = 0;
         foreach (var c in cols)
         {
-            var size = GetColumnSize(c, is64Bit);
+            var size = datParsingService.GetColumnSize(c, is64Bit);
             if (offset + size > actualRowSize)
             {
                 break;
             }
 
-            var val = ReadColumnValue(data, rowStart + offset, c, is64Bit, separatorIndex);
+            var val = datParsingService.ReadColumnValue(data, rowStart + offset, c, is64Bit, separatorIndex);
 
             // Recursive Foreign Key Resolution (Limit 5)
             if (c.Type == "foreignrow" && val != "null" && val.StartsWith("FK(") && currentDepth < 5)
@@ -1992,13 +1573,4 @@ public partial class MainWindowViewModel(
 
         return null;
     }
-
-    public record DatRowInfo(
-        ObservableCollection<DatRow> Rows,
-        List<string> Headers,
-        List<double> ColumnWidths,
-        List<SchemaColumn>? Columns = null);
-
-    [UsedImplicitly(ImplicitUseTargetFlags.WithMembers)]
-    public record DatRow(int Index, string[] Values);
 }

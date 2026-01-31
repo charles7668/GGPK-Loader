@@ -8,6 +8,7 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.VisualTree;
+using GGPK_Loader.Models;
 using GGPK_Loader.ViewModels;
 
 // Needed for GetVisualDescendants
@@ -51,7 +52,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void UpdateLayout(MainWindowViewModel.DatRowInfo? info)
+    private void UpdateLayout(DatRowInfo? info)
     {
         if (_listBox == null || _headerPanel == null || _indexListBox == null || _rowHeaderLabel == null)
         {
@@ -82,7 +83,7 @@ public partial class MainWindow : Window
             });
         }
 
-        _indexListBox.ItemTemplate = new FuncDataTemplate<MainWindowViewModel.DatRow>((_, _) =>
+        _indexListBox.ItemTemplate = new FuncDataTemplate<DatRow>((_, _) =>
         {
             var tb = new TextBlock
             {
@@ -97,7 +98,7 @@ public partial class MainWindow : Window
             return tb;
         });
 
-        _listBox.ItemTemplate = new FuncDataTemplate<MainWindowViewModel.DatRow>((_, _) =>
+        _listBox.ItemTemplate = new FuncDataTemplate<DatRow>((_, _) =>
         {
             var panel = new StackPanel { Orientation = Orientation.Horizontal, Background = Brushes.Transparent };
 
@@ -139,7 +140,7 @@ public partial class MainWindow : Window
 
             contextMenu.Items.Add(copyItem);
             contextMenu.Items.Add(copyJsonItem);
-            
+
             var copyBinaryItem = new MenuItem { Header = "Copy Binary" };
             if (DataContext is MainWindowViewModel vmBinary)
             {
@@ -149,6 +150,7 @@ public partial class MainWindow : Window
                     Source = vmBinary
                 });
             }
+
             copyBinaryItem.Bind(MenuItem.CommandParameterProperty, new Binding
             {
                 Path = "SelectedItems",

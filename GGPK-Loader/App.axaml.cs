@@ -2,7 +2,6 @@ using System;
 using System.IO;
 using System.Linq;
 using Avalonia;
-using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Data.Core.Plugins;
 using Avalonia.Markup.Xaml;
@@ -37,6 +36,7 @@ public class App : Application
             collection.AddSingleton<IGgpkBundleService, GgpkBundleService>();
             collection.AddSingleton<ISchemaService, SchemaService>();
             collection.AddSingleton<ITextureService, TextureService>();
+            collection.AddSingleton<IDatParsingService, DatParsingService>();
             collection.AddSingleton<MainWindowViewModel>();
 
             var services = collection.BuildServiceProvider();
