@@ -25,7 +25,7 @@ namespace GGPK_Loader.ViewModels;
 
 [method: UsedImplicitly]
 public partial class MainWindowViewModel(
-    IFileService fileService,
+    IFileDialogService fileDialogService,
     IMessageService messageService,
     IGgpkParsingService ggpkParsingService,
     IGgpkBundleService ggpkBundleService,
@@ -48,8 +48,6 @@ public partial class MainWindowViewModel(
     private string _datFilterText = "";
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsDatViewVisible))]
-    [NotifyPropertyChangedFor(nameof(IsInfoTextVisible))]
     [NotifyPropertyChangedFor(nameof(IsDatViewVisible))]
     [NotifyPropertyChangedFor(nameof(IsInfoTextVisible))]
     private DatRowInfo? _datInfoSource;
@@ -758,7 +756,7 @@ public partial class MainWindowViewModel(
     [RelayCommand(CanExecute = nameof(CanOpenGgpkFile))]
     private async Task OpenGgpkFile()
     {
-        var filePath = await fileService.OpenFileAsync();
+        var filePath = await fileDialogService.OpenFileAsync();
         if (filePath == null)
         {
             return;
@@ -829,7 +827,7 @@ public partial class MainWindowViewModel(
             }
         }
 
-        var savePath = await fileService.SaveFileAsync("Save Tree Structure", "GGPK_Tree_Structure", "txt");
+        var savePath = await fileDialogService.SaveFileAsync("Save Tree Structure", "GGPK_Tree_Structure", "txt");
         if (string.IsNullOrEmpty(savePath))
         {
             return;
@@ -898,7 +896,7 @@ public partial class MainWindowViewModel(
             return;
         }
 
-        var savePath = await fileService.SaveFileAsync("Save File", fileName, "");
+        var savePath = await fileDialogService.SaveFileAsync("Save File", fileName, "");
         if (string.IsNullOrEmpty(savePath))
         {
             return;
@@ -968,7 +966,7 @@ public partial class MainWindowViewModel(
         {
             try
             {
-                var filePath = await fileService.OpenFileAsync();
+                var filePath = await fileDialogService.OpenFileAsync();
                 if (string.IsNullOrEmpty(filePath))
                 {
                     return;
@@ -1066,7 +1064,7 @@ public partial class MainWindowViewModel(
         {
             try
             {
-                var filePath = await fileService.OpenFileAsync();
+                var filePath = await fileDialogService.OpenFileAsync();
                 if (string.IsNullOrEmpty(filePath))
                 {
                     return;

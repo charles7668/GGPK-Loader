@@ -4,7 +4,13 @@ using Avalonia.Platform.Storage;
 
 namespace GGPK_Loader.Services;
 
-public class FileService(Window target) : IFileService
+public interface IFileDialogService
+{
+    Task<string?> OpenFileAsync();
+    Task<string?> SaveFileAsync(string title, string defaultFileName, string extension);
+}
+
+public class FileDialogService(Window target) : IFileDialogService
 {
     public async Task<string?> OpenFileAsync()
     {
@@ -18,11 +24,11 @@ public class FileService(Window target) : IFileService
         {
             Title = "Select File",
             AllowMultiple = false,
-            FileTypeFilter = new[]
-            {
-                new FilePickerFileType("GGPK Files") { Patterns = new[] { "*.*" } },
+            FileTypeFilter =
+            [
+                new FilePickerFileType("GGPK Files") { Patterns = ["*.*"] },
                 FilePickerFileTypes.All
-            }
+            ]
         });
 
         return files.Count >= 1 ? files[0].Path.LocalPath : null;
@@ -41,11 +47,11 @@ public class FileService(Window target) : IFileService
             Title = title,
             SuggestedFileName = defaultFileName,
             DefaultExtension = extension,
-            FileTypeChoices = new[]
-            {
-                new FilePickerFileType("Text Files") { Patterns = new[] { $"*.{extension}" } },
+            FileTypeChoices =
+            [
+                new FilePickerFileType("Text Files") { Patterns = [$"*.{extension}"] },
                 FilePickerFileTypes.All
-            }
+            ]
         });
 
         return file?.Path.LocalPath;

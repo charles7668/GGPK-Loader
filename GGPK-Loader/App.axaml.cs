@@ -29,7 +29,8 @@ public class App : Application
 
             var collection = new ServiceCollection();
             collection.AddSingleton<MainWindow>();
-            collection.AddSingleton<IFileService>(sp => new FileService(sp.GetRequiredService<MainWindow>()));
+            collection.AddSingleton<IFileDialogService>(sp =>
+                new FileDialogService(sp.GetRequiredService<MainWindow>()));
             collection.AddSingleton<IMessageService>(sp => new MessageService(sp.GetRequiredService<MainWindow>()));
             collection.AddSingleton<IStreamManager, StreamManager>();
             collection.AddSingleton<IGgpkParsingService, GgpkParsingService>();
